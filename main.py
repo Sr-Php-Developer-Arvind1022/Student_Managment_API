@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from db import get_db
 
 app = FastAPI()
-origins = [""] 
+origins = ["*"] 
 
 app.add_middleware(
     CORSMiddleware,
