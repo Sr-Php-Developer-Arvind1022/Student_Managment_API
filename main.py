@@ -1,33 +1,50 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Body
 from pydantic import BaseModel
-import uvicorn
-import os
+from SuperAdmin import Api as superadmin_api
+from SuperAdmin.Api import super_admin_login, SuperAdminLoginRequest
+from Admin.Api import admin_login
+from Admin.Api import AdminLoginRequest, AdminLoginRequest
+from Admin import Api as admin_api
+from Student import Api as student_api
+
+from db import get_db
 
 app = FastAPI()
 
-# Root endpoint
 @app.get("/")
-async def read_root():
+def read_root():
     return {"message": "Student Management API is running."}
 
-# Pydantic models
 class LoginRequest(BaseModel):
     username: str
     password: str
 
-class RegisterRequest(BaseModel):
-    name: str
-    email: str
-    password: str
+@app.post("/login")
+def login(request: LoginRequest):
+    # Here you would check the username and password against your database or authentication service
+    print("Login API is working.")
+    # Dummy logic: always return success for demonstration
+    return {"status": True, "message": "Login successfully"}
 
-# Placeholder for student_api (replace with actual implementation)
-class StudentAPI:
-    @staticmethod
-    def register_student(data: dict):
-        # Replace with actual registration logic (e.g., save to database)
-        return {"status": "success", "data": data}
+@app.post("/superadmin/login-direct")
+def superadmin_login_direct(request: SuperAdminLoginRequest):
+    return super_admin_login(request)
+#longin API for super admin 
+@app.post("admin/login")
+def admin_login(request: LoginRequest):
+    return admin_login(request)
 
+app.include_router(admin_api.router)
+app.include_router(student_api.router)
+# Student registration API
+# @app.post("/student/register")  
+# def student_register(name: str = Body(...), email: str = Body(...), password: str = Body(...)):
+#     return student_api.register_student({"name": name, "email": email, "password": password})
+# main.py
+# Entry point for the Student Management API
 
+def main():
+    print("Student Management API is running.")
 # Main entry point
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 10000))  # Use Render's PORT or default to 10000 locally
