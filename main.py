@@ -1,25 +1,34 @@
-from fastapi import FastAPI, Request, Body
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
+import uvicorn
+import os
 
 app = FastAPI()
 
+# Root endpoint
 @app.get("/")
-def read_root():
+async def read_root():
     return {"message": "Student Management API is running."}
 
+# Pydantic models
 class LoginRequest(BaseModel):
     username: str
     password: str
 
-# Student registration API
-# @app.post("/student/register")  
-# def student_register(name: str = Body(...), email: str = Body(...), password: str = Body(...)):
-#     return student_api.register_student({"name": name, "email": email, "password": password})
-# main.py
-# Entry point for the Student Management API
+class RegisterRequest(BaseModel):
+    name: str
+    email: str
+    password: str
 
-def main():
-    print("Student Management API is running.")
+# Placeholder for student_api (replace with actual implementation)
+class StudentAPI:
+    @staticmethod
+    def register_student(data: dict):
+        # Replace with actual registration logic (e.g., save to database)
+        return {"status": "success", "data": data}
 
+
+# Main entry point
 if __name__ == "__main__":
-    main()
+    port = int(os.getenv("PORT", 10000))  # Use Render's PORT or default to 10000 locally
+    uvicorn.run(app, host="0.0.0.0", port=port)
