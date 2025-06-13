@@ -45,6 +45,7 @@ app.include_router(student_api.router)
 
 def main():
     print("Student Management API is running.")
-
+# Main entry point
 if __name__ == "__main__":
-    main()
+    port = int(os.getenv("PORT", 10000))  # Use Render's PORT or default to 10000 locally
+    uvicorn.run(app, host="0.0.0.0", port=port)
