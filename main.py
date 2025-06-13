@@ -6,10 +6,20 @@ from Admin.Api import admin_login
 from Admin.Api import AdminLoginRequest, AdminLoginRequest
 from Admin import Api as admin_api
 from Student import Api as student_api
+from fastapi.middleware.cors import CORSMiddleware
 
 from db import get_db
 
 app = FastAPI()
+origins = [""] 
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,            # 👈 List of allowed origins
+    allow_credentials=True,
+    allow_methods=["*"],              # 👈 Allow all methods like GET, POST
+    allow_headers=["*"],              # 👈 Allow all headers
+)
 
 @app.get("/")
 def read_root():
