@@ -1,7 +1,7 @@
 from pymongo import MongoClient
 from contextlib import contextmanager
 
-MONGO_URI = 'mongodb+srv://prajapatiarvind1007:6cSwBO52YBQfgdrX@cluster0.g55ezzm.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0'
+MONGO_URI = 'mongodb+srv://arvind:arvind123@cluster0.d3e8kz2.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0'
 DB_NAME = 'StudentManagementDb'
 
 @contextmanager
