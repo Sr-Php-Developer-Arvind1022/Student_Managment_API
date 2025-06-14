@@ -1,8 +1,10 @@
+from collections import defaultdict
 from pydantic import BaseModel
 from fastapi import APIRouter, Body,Query
 from db import get_db
 import re
 import uuid
+from datetime import datetime
 
 router = APIRouter()
 
@@ -235,7 +237,8 @@ def submitMultipleQuizAnswers(
                 "common_id": common_id,
                 "question": question,
                 "selected_option": selected_option,
-                "is_correct": is_correct
+                "is_correct": is_correct,
+                "quize_date": datetime.now()
             })
 
             inserted.append({
@@ -252,19 +255,49 @@ def submitMultipleQuizAnswers(
 def getStudentQuizResult(common_id: str):
     with get_db() as db:
         answers = list(db.quiz_answers.find({"student_common_id": common_id}))
-
+    
         if not answers:
             return {"status": False, "message": "No answers found for this student"}
+        
+        grouped_results = defaultdict(list)
+        total_attempts = 0
+        correct_count = 0
 
-        total_attempts = len(answers)
-        correct_count = sum(1 for ans in answers if ans.get("is_correct"))
+        for ans in answers:
+            question = db.quiz_questions.find_one({"question": ans.get("question")})
+            if question:
+                # Format date as YYYY-MM-DD
+                quize_date = ans.get("quize_date")
+                if isinstance(quize_date, datetime):
+                    date_key = quize_date.strftime("%Y-%m-%d")
+                else:
+                    date_key = "unknown"
+
+                result_item = {
+                    "question_id": str(question.get("_id")),
+                    "question": question.get("question"),
+                    "options": question.get("options"),
+                    "correct_option": question.get("correct_option"),
+                    "selected_option": ans.get("selected_option"),
+                    "is_correct": ans.get("is_correct"),
+                    "answered_at": quize_date
+                }
+
+                grouped_results[date_key].append(result_item)
+                total_attempts += 1
+                if ans.get("is_correct"):
+                    correct_count += 1
+
+        # Convert defaultdict to regular dict
+        grouped_results = dict(grouped_results)
 
         return {
             "status": True,
             "common_id": common_id,
             "total_attempted": total_attempts,
             "correct_answers": correct_count,
-            "wrong_answers": total_attempts - correct_count
+            "wrong_answers": total_attempts - correct_count,
+            "grouped_data": grouped_results
         }
 
 
