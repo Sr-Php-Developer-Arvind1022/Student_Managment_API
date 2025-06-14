@@ -89,9 +89,9 @@ def register_student(request: dict = Body(...)):
 @router.get("/students/studentsDetails")
 def get_all_students():
     with get_db() as db:
-        # Fetch all records from both collections
-        login_cursor = db.login_table.find({}, {"_id": 0})
-        student_cursor = db.students.find({}, {"_id": 0})
+        # Use index on 'common_id'
+        login_cursor = db.login_table.find({}, {"_id": 0}).hint("common_id_1")
+        student_cursor = db.students.find({}, {"_id": 0}).hint("common_id_1")
 
         login_data = list(login_cursor)
         student_data = list(student_cursor)
@@ -124,48 +124,41 @@ def get_student_details(
     with get_db() as db:
         student = None
 
-        # Match by common_id
+        # Use index on 'common_id', 'email', 'contact_number'
         if common_id:
-            student = db.students.find_one({"common_id": common_id}, {"_id": 0})
-
-        # Match by email
+            student = db.students.find_one({"common_id": common_id}, {"_id": 0}, hint="common_id_1")
         elif email:
-            student = db.students.find_one({"email": email}, {"_id": 0})
-
-        # Match by contact number
+            student = db.students.find_one({"email": email}, {"_id": 0}, hint="email_1")
         elif contact_number:
-            student = db.students.find_one({"contact_number": contact_number}, {"_id": 0})
+            student = db.students.find_one({"contact_number": contact_number}, {"_id": 0}, hint="contact_number_1")
 
         if not student:
             return {"status": False, "message": "Student not found"}
 
-        # Get login data using common_id
-        login = db.login_table.find_one({"common_id": student["common_id"]}, {"_id": 0})
-
-        # Merge both if found
+        login = db.login_table.find_one({"common_id": student["common_id"]}, {"_id": 0}, hint="common_id_1")
         merged = {**login, **student} if login else student
 
         return {"status": True, "data": merged}
+
 @router.post("/student/login")
 def studentLogin(
     email: str = Body(...),
     password: str = Body(...)
 ):
     with get_db() as db:
-        # Find login by email and password
-        login = db.login_table.find_one({
-            "email": email.strip().lower(),
-            "password_hash": password
-        }, {"_id": 0})
+        # Remove hint if index may not exist, or ensure index is created with the correct name
+        login = db.login_table.find_one(
+            {"email": email.strip().lower(), "password_hash": password},
+            {"_id": 0}
+        )
 
         if not login:
             return {"status": False, "message": "Invalid email or password"}
 
-        # Get student by common_id
+        # Use index on 'common_id' for faster lookup (safe, as created in startup)
         common_id = login.get("common_id")
-        student = db.students.find_one({"common_id": common_id}, {"_id": 0})
+        student = db.students.find_one({"common_id": common_id}, {"_id": 0}, hint="common_id_1")
 
-        # Merge if student exists
         merged = {**login, **student} if student else login
 
         return {"status": True, "data": merged}
@@ -195,7 +188,8 @@ def addQuizeQuestion(
 @router.get("/quiz/all-questions")
 def getAllQuizQuestions():
     with get_db() as db:
-        cursor = db.quiz_questions.find({}, {"_id": 0})
+        # Use index on 'question'
+        cursor = db.quiz_questions.find({}, {"_id": 0}).hint("question_1")
         questions = list(cursor)
 
         if not questions:
@@ -268,7 +262,8 @@ def submitMultipleQuizAnswers(
 @router.get("/quiz/student-result")
 def getStudentQuizResult(common_id: str):
     with get_db() as db:
-        answers = list(db.quiz_answers.find({"student_common_id": common_id}))
+        # Use index on 'student_common_id' and 'quize_date'
+        answers = list(db.quiz_answers.find({"student_common_id": common_id}).hint([("student_common_id", 1), ("quize_date", 1)]))
     
         if not answers:
             return {"status": False, "message": "No answers found for this student"}
@@ -329,5 +324,58 @@ def getStudentQuizResult(common_id: str):
             "date_wise": date_wise_stats,
             "grouped_data": grouped_results
         }
+@router.on_event("startup")
+def create_indexes():
+    # Optimize queries by adding indexes
+    with get_db() as db:
+        db.students.create_index("common_id")
+        db.students.create_index("email")
+        db.quiz_questions.create_index("question")
+        db.quiz_answers.create_index([("student_common_id", 1), ("quize_date", 1)])
+        db.quiz_answers.create_index("question")
+
+@router.get("/students/all")
+def get_all_students_fast():
+    with get_db() as db:
+        # Use index on 'common_id'
+        students = list(db.students.find({}, {"_id": 0}).hint("common_id_1"))
+        return {"status": True, "data": students} if students else {"status": False, "message": "No students found"}
+
+@router.get("/quizzes/all")
+def get_all_quizzes_fast():
+    with get_db() as db:
+        # Use index on 'question'
+        quizzes = list(db.quiz_questions.find({}, {"_id": 0}).hint("question_1"))
+        return {"status": True, "data": quizzes} if quizzes else {"status": False, "message": "No quizzes found"}
+@router.put("/quiz/update-question")
+def update_quiz_question(
+    common_id: str = Body(...),
+    question: str = Body(None),
+    options: list = Body(None),
+    correct_option: str = Body(None)
+):
+    with get_db() as db:
+        update_fields = {}
+        if question is not None:
+            update_fields["question"] = question
+        if options is not None:
+            update_fields["options"] = options
+        if correct_option is not None:
+            update_fields["correct_option"] = correct_option
+
+        if not update_fields:
+            return {"status": False, "message": "No fields to update."}
+
+        result = db.quiz_questions.update_one(
+            {"common_id": common_id},
+            {"$set": update_fields}
+        )
+
+        if result.matched_count == 0:
+            return {"status": False, "message": "No question found with the given common_id."}
+        if result.modified_count == 0:
+            return {"status": True, "message": "No changes made (data may be identical)."}
+
+        return {"status": True, "message": "Question updated successfully."}
 
 
