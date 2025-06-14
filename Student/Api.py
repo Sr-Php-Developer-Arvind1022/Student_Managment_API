@@ -4,7 +4,7 @@ from fastapi import APIRouter, Body,Query
 from db import get_db
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime,timedelta
 
 router = APIRouter()
 
@@ -208,8 +208,13 @@ def submitMultipleQuizAnswers(
     answers: list = Body(...)
 ):
     with get_db() as db:
-        # ❌ Check if student already submitted any answer
-        existing = db.quiz_answers.find_one({"student_common_id": student_common_id})
+        today = datetime.now()
+        start_of_day = datetime(today.year, today.month, today.day)
+        end_of_day = start_of_day + timedelta(days=1)
+        existing = db.quiz_answers.find_one({
+            "student_common_id": student_common_id,
+            "quize_date": {"$gte": start_of_day, "$lt": end_of_day}
+        })
         if existing:
             return {
                 "status": False,
@@ -232,25 +237,34 @@ def submitMultipleQuizAnswers(
 
             is_correct = selected_option == quiz.get("correct_option")
 
-            db.quiz_answers.insert_one({
+            # Actually insert only if all fields are valid
+            result = db.quiz_answers.insert_one({
                 "student_common_id": student_common_id,
                 "common_id": common_id,
                 "question": question,
                 "selected_option": selected_option,
                 "is_correct": is_correct,
-                "quize_date": datetime.now()
+                "quize_date": today
             })
 
-            inserted.append({
-                "question": question,
-                "correct": is_correct
-            })
+            # Only append if insert was acknowledged
+            if result.acknowledged:
+                inserted.append({
+                    "question": question,
+                    "correct": is_correct
+                })
 
-        return {
-            "status": True,
-            "message": "Answers submitted successfully",
-            "data": inserted
-        }
+        if inserted:
+            return {
+                "status": True,
+                "message": "Answers submitted successfully",
+                "data": inserted
+            }
+        else:
+            return {
+                "status": False,
+                "message": "Please check your answers. No valid answers to submit."
+            }
 @router.get("/quiz/student-result")
 def getStudentQuizResult(common_id: str):
     with get_db() as db:
@@ -260,18 +274,23 @@ def getStudentQuizResult(common_id: str):
             return {"status": False, "message": "No answers found for this student"}
         
         grouped_results = defaultdict(list)
+        date_stats = defaultdict(lambda: {"correct": 0, "wrong": 0})
         total_attempts = 0
         correct_count = 0
 
         for ans in answers:
             question = db.quiz_questions.find_one({"question": ans.get("question")})
             if question:
-                # Format date as YYYY-MM-DD
                 quize_date = ans.get("quize_date")
+                # Convert ISO timestamp to YYYY-MM-DD
                 if isinstance(quize_date, datetime):
                     date_key = quize_date.strftime("%Y-%m-%d")
                 else:
-                    date_key = "unknown"
+                    try:
+                        quize_date = datetime.fromisoformat(quize_date)
+                        date_key = quize_date.strftime("%Y-%m-%d")
+                    except:
+                        date_key = "unknown"
 
                 result_item = {
                     "question_id": str(question.get("_id")),
@@ -287,9 +306,19 @@ def getStudentQuizResult(common_id: str):
                 total_attempts += 1
                 if ans.get("is_correct"):
                     correct_count += 1
+                    date_stats[date_key]["correct"] += 1
+                else:
+                    date_stats[date_key]["wrong"] += 1
 
-        # Convert defaultdict to regular dict
+        # Convert defaultdicts to regular dicts
         grouped_results = dict(grouped_results)
+        date_wise_stats = {
+            date: {
+                "correct_answers": stats["correct"],
+                "wrong_answers": stats["wrong"]
+            }
+            for date, stats in date_stats.items()
+        }
 
         return {
             "status": True,
@@ -297,6 +326,7 @@ def getStudentQuizResult(common_id: str):
             "total_attempted": total_attempts,
             "correct_answers": correct_count,
             "wrong_answers": total_attempts - correct_count,
+            "date_wise": date_wise_stats,
             "grouped_data": grouped_results
         }
 
