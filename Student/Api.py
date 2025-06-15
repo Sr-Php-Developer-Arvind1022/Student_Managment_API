@@ -377,5 +377,12 @@ def update_quiz_question(
             return {"status": True, "message": "No changes made (data may be identical)."}
 
         return {"status": True, "message": "Question updated successfully."}
+@router.get("/quiz/question-by-id")
+def get_question_by_id(common_id: str = Query(...)):
+    with get_db() as db:
+        question = db.quiz_questions.find_one({"common_id": common_id}, {"_id": 0})
+        if not question:
+            return {"status": False, "message": "No question found with the given common_id."}
+        return {"status": True, "data": question}
 
 
