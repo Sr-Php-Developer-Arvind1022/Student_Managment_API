@@ -260,9 +260,6 @@ def submitMultipleQuizAnswers(
                 "message": "Please check your answers. No valid answers to submit."
             }
 @router.get("/quiz/student-result")
-from collections import defaultdict
-from datetime import datetime
-
 def getStudentQuizResult(common_id: str):
     with get_db() as db:
         answers = list(db.quiz_answers.find({
