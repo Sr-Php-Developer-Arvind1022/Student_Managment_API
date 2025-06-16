@@ -260,15 +260,20 @@ def submitMultipleQuizAnswers(
                 "message": "Please check your answers. No valid answers to submit."
             }
 @router.get("/quiz/student-result")
+from collections import defaultdict
+from datetime import datetime
+
 def getStudentQuizResult(common_id: str):
     with get_db() as db:
-        answers = list(db.quiz_answers.find({"student_common_id": common_id}).hint([("student_common_id", 1), ("quize_date", 1)]))
-    
+        answers = list(db.quiz_answers.find({
+            "student_common_id": common_id
+        }).hint([("student_common_id", 1), ("quize_date", 1)]))
+
         if not answers:
             return {"status": False, "message": "No answers found for this student"}
-        
+
         grouped_results = defaultdict(list)
-        date_stats = defaultdict(lambda: {"correct": 0, "wrong": 0})
+        date_stats = defaultdict(lambda: {"correct": 0, "wrong": 0, "total": 0})
         total_attempts = 0
         correct_count = 0
 
@@ -297,6 +302,8 @@ def getStudentQuizResult(common_id: str):
 
                 grouped_results[date_key].append(result_item)
                 total_attempts += 1
+                date_stats[date_key]["total"] += 1
+
                 if ans.get("is_correct"):
                     correct_count += 1
                     date_stats[date_key]["correct"] += 1
@@ -306,16 +313,15 @@ def getStudentQuizResult(common_id: str):
         grouped_results = dict(grouped_results)
         date_wise_stats = {
             date: {
+                "total_attempts": stats["total"],
                 "correct_answers": stats["correct"],
                 "wrong_answers": stats["wrong"]
             }
             for date, stats in date_stats.items()
         }
 
-        # 🔴 Calculate performance percentage
         performance_percentage = (correct_count / total_attempts) * 100 if total_attempts > 0 else 0
 
-        # 🔴 Assign performance category
         if performance_percentage >= 85:
             performance_category = "Excellent"
         elif performance_percentage >= 60:
@@ -329,7 +335,6 @@ def getStudentQuizResult(common_id: str):
             "total_attempted": total_attempts,
             "correct_answers": correct_count,
             "wrong_answers": total_attempts - correct_count,
-            # 🔴 Return performance data
             "performance_percentage": round(performance_percentage, 2),
             "performance_category": performance_category,
             "date_wise": date_wise_stats,
