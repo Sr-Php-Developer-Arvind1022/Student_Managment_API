@@ -7,7 +7,7 @@ from Admin.Api import AdminLoginRequest, AdminLoginRequest
 from Admin import Api as admin_api
 from Student import Api as student_api
 from fastapi.middleware.cors import CORSMiddleware
-
+from websocket_demo import app as websocket_app
 from db import get_db
 
 app = FastAPI()
@@ -46,6 +46,8 @@ def admin_login(request: LoginRequest):
 
 app.include_router(admin_api.router)
 app.include_router(student_api.router)
+# Mount the websocket demo app at a subpath (e.g. /ws-demo)
+app.mount("/ws-demo", websocket_app)
 # Student registration API
 # @app.post("/student/register")  
 # def student_register(name: str = Body(...), email: str = Body(...), password: str = Body(...)):
