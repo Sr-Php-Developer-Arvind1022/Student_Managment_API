@@ -262,14 +262,15 @@ def submitMultipleQuizAnswers(
 @router.get("/quiz/student-result")
 def getStudentQuizResult(common_id: str):
     with get_db() as db:
-        # Use index on 'student_common_id' and 'quize_date'
-        answers = list(db.quiz_answers.find({"student_common_id": common_id}).hint([("student_common_id", 1), ("quize_date", 1)]))
-    
+        answers = list(db.quiz_answers.find({
+            "student_common_id": common_id
+        }).hint([("student_common_id", 1), ("quize_date", 1)]))
+
         if not answers:
             return {"status": False, "message": "No answers found for this student"}
-        
+
         grouped_results = defaultdict(list)
-        date_stats = defaultdict(lambda: {"correct": 0, "wrong": 0})
+        date_stats = defaultdict(lambda: {"correct": 0, "wrong": 0, "total": 0})
         total_attempts = 0
         correct_count = 0
 
@@ -277,7 +278,6 @@ def getStudentQuizResult(common_id: str):
             question = db.quiz_questions.find_one({"question": ans.get("question")})
             if question:
                 quize_date = ans.get("quize_date")
-                # Convert ISO timestamp to YYYY-MM-DD
                 if isinstance(quize_date, datetime):
                     date_key = quize_date.strftime("%Y-%m-%d")
                 else:
@@ -299,21 +299,32 @@ def getStudentQuizResult(common_id: str):
 
                 grouped_results[date_key].append(result_item)
                 total_attempts += 1
+                date_stats[date_key]["total"] += 1
+
                 if ans.get("is_correct"):
                     correct_count += 1
                     date_stats[date_key]["correct"] += 1
                 else:
                     date_stats[date_key]["wrong"] += 1
 
-        # Convert defaultdicts to regular dicts
         grouped_results = dict(grouped_results)
         date_wise_stats = {
             date: {
+                "total_attempts": stats["total"],
                 "correct_answers": stats["correct"],
                 "wrong_answers": stats["wrong"]
             }
             for date, stats in date_stats.items()
         }
+
+        performance_percentage = (correct_count / total_attempts) * 100 if total_attempts > 0 else 0
+
+        if performance_percentage >= 85:
+            performance_category = "Excellent"
+        elif performance_percentage >= 60:
+            performance_category = "Good"
+        else:
+            performance_category = "Bad"
 
         return {
             "status": True,
@@ -321,6 +332,8 @@ def getStudentQuizResult(common_id: str):
             "total_attempted": total_attempts,
             "correct_answers": correct_count,
             "wrong_answers": total_attempts - correct_count,
+            "performance_percentage": round(performance_percentage, 2),
+            "performance_category": performance_category,
             "date_wise": date_wise_stats,
             "grouped_data": grouped_results
         }
