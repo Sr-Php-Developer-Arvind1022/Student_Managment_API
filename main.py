@@ -1,6 +1,5 @@
 from fastapi import FastAPI, Request, Body
 from pydantic import BaseModel
-import uvicorn
 from SuperAdmin import Api as superadmin_api
 from SuperAdmin.Api import super_admin_login, SuperAdminLoginRequest
 from Admin.Api import admin_login
@@ -8,11 +7,8 @@ from Admin.Api import AdminLoginRequest, AdminLoginRequest
 from Admin import Api as admin_api
 from Student import Api as student_api
 from fastapi.middleware.cors import CORSMiddleware
-import os
-from websocket_demo import app as websocket_app
 
 from db import get_db
-from websocket_demo import app as websocket_app
 
 app = FastAPI()
 origins = ["*"] 
@@ -50,9 +46,6 @@ def admin_login(request: LoginRequest):
 
 app.include_router(admin_api.router)
 app.include_router(student_api.router)
-
-# Mount the websocket demo app at a subpath (e.g. /ws-demo)
-app.mount("/ws-demo", websocket_app)
 # Student registration API
 # @app.post("/student/register")  
 # def student_register(name: str = Body(...), email: str = Body(...), password: str = Body(...)):
@@ -64,5 +57,5 @@ def main():
     print("Student Management API is running.")
 # Main entry point
 if __name__ == "__main__":
-    port = 10000  # Always use port 10000
+    port = int(os.getenv("PORT", 10000))  # Use Render's PORT or default to 10000 locally
     uvicorn.run(app, host="0.0.0.0", port=port)
