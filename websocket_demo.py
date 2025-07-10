@@ -1,10 +1,13 @@
 # Assuming this is in your websocket_demo.py or websocket_routes.py
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
+from typing import Optional
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Body
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from db import get_db
 import json
 import logging
 import datetime
+import uuid
 from bson import ObjectId # <--- ADD THIS IMPORT for ObjectId type
 
 # Configure logging
@@ -142,3 +145,161 @@ def get_chat_history(sender_id: str = Query(...), receiver_id: str = Query(...))
     except Exception as e:
         logger.error(f"Failed to fetch chat history: {e}", exc_info=True)
         return {"status": False, "message": "Failed to retrieve chat history", "error": str(e)}
+
+
+@app.post("/baatchit/user/create")
+def create_baatchit_user(
+    full_name: str = Body(...),
+    email: str = Body(...),
+    mobile_number: str = Body(...),
+    password: str = Body(...),
+    confirm_password: str = Body(...)
+):
+    if password != confirm_password:
+        return JSONResponse(content={"status": False, "message": "Passwords do not match"})
+    user_comman_id = str(uuid.uuid4())
+    user_status = "active"
+    user_created_date = datetime.datetime.utcnow().isoformat()
+    with get_db() as db:
+        if db.baatchit_user.find_one({"$or": [{"email": email}, {"mobile_number": mobile_number}]}):
+            return JSONResponse(content={"status": False, "message": "User already exists"})
+        db.baatchit_user.insert_one({
+            "full_name": full_name,
+            "email": email,
+            "mobile_number": mobile_number,
+            "password": password,
+            "user_comman_id": user_comman_id,
+            "user_status": user_status,
+            "user_created_date": user_created_date
+        })
+    return JSONResponse(content={"status": True, "message": "User created successfully", "user_comman_id": user_comman_id})
+
+@app.get("/baatchit/user/search")
+def search_baatchit_user(
+    full_name: str = Query(None),
+    email: str = Query(None),
+    mobile_number: str = Query(None)
+):
+    query = {}
+    if full_name:
+        query["full_name"] = {"$regex": full_name, "$options": "i"}
+    if email:
+        query["email"] = email
+    if mobile_number:
+        query["mobile_number"] = mobile_number
+    with get_db() as db:
+        users = list(db.baatchit_user.find(query, {"_id": 0, "password": 0}))
+    return JSONResponse(content={"status": True, "users": users})
+
+@app.post("/baatchit/user/login")
+def baatchit_user_login(
+    email: Optional[str] = Body(None),
+    mobile_number: Optional[str] = Body(None),
+    password: str = Body(...)
+):
+    if not email and not mobile_number:
+        return JSONResponse(content={"status": False, "message": "Either email or mobile must be provided"}, status_code=400)
+    if email and mobile_number:
+        return JSONResponse(content={"status": False, "message": "Provide either email or mobile, not both"}, status_code=400)
+
+    with get_db() as db:
+        query = {"password": password}
+        if email:
+            query["email"] = email
+        else:
+            query["mobile_number"] = mobile_number
+
+        user = db.baatchit_user.find_one(query, {"_id": 0, "password": 0})
+        if not user:
+            return JSONResponse(content={"status": False, "message": "Invalid email/mobile or password"}, status_code=401)
+    return JSONResponse(content={"status": True, "user": user})
+
+@app.post("/baatchit/send-request")
+def send_baatchit_request(
+    from_user: str = Body(...),
+    to_user: str = Body(...)
+):
+    with get_db() as db:
+        if db.baatchit_request.find_one({"from_user": from_user, "to_user": to_user}):
+            return JSONResponse(content={"status": False, "message": "Request already sent"})
+        db.baatchit_request.insert_one({
+            "from_user": from_user,
+            "to_user": to_user,
+            "status": "pending",
+            "created_at": datetime.datetime.utcnow().isoformat()
+        })
+    return JSONResponse(content={"status": True, "message": "Request sent"})
+
+@app.post("/baatchit/approve-request")
+def approve_baatchit_request(
+    from_user: str = Body(...),
+    to_user: str = Body(...)
+):
+    with get_db() as db:
+        result = db.baatchit_request.update_one(
+            {"from_user": from_user, "to_user": to_user, "status": "pending"},
+            {"$set": {"status": "approved", "approved_at": datetime.datetime.utcnow().isoformat()}}
+        )
+        if result.modified_count > 0:
+            # Insert into baatchit_user_map (bidirectional for easy lookup)
+            db.baatchit_user_map.insert_one({
+                "user_comman_id": to_user,  # the one who approved (me)
+                "friend_comman_id": from_user,
+                "created_at": datetime.datetime.utcnow().isoformat()
+            })
+            db.baatchit_user_map.insert_one({
+                "user_comman_id": from_user,
+                "friend_comman_id": to_user,
+                "created_at": datetime.datetime.utcnow().isoformat()
+            })
+            return JSONResponse(content={"status": True, "message": "Request approved successfully"})
+        else:
+            return JSONResponse(content={"status": False, "message": "No pending request found or already processed"})
+
+@app.get("/baatchit/requests/received")
+def get_received_requests(common_id: str = Query(...)):
+    """
+    Returns all chat requests received by the user (to_user = my common_id),
+    including sender's name and sender's common_id.
+    """
+    with get_db() as db:
+        # Find all requests where to_user is my common_id and status is pending
+        requests = list(db.baatchit_request.find(
+            {"to_user": common_id, "status": "pending"}
+        ))
+
+        # For each request, get sender's details from baatchit_user
+        result = []
+        for req in requests:
+            sender = db.baatchit_user.find_one(
+                {"user_comman_id": req["from_user"]},
+                {"_id": 0, "full_name": 1, "user_comman_id": 1}
+            )
+            result.append({
+                "from_user": req["from_user"],
+                "sender_name": sender["full_name"] if sender else None,
+                "sender_comman_id": sender["user_comman_id"] if sender else None,
+                "request_status": req.get("status"),
+                "request_created_at": req.get("created_at")
+            })
+
+    return JSONResponse(content={"status": True, "requests": result})
+
+@app.get("/baatchit/friends")
+def get_my_friends(common_id: str = Query(...)):
+    """
+    Returns all friends for the given user (by common_id), joined with user details.
+    """
+    with get_db() as db:
+        # Find all friend mappings for this user
+        mappings = list(db.baatchit_user_map.find({"user_comman_id": common_id}))
+        friend_ids = [m["friend_comman_id"] for m in mappings]
+        if not friend_ids:
+            return JSONResponse(content={"status": True, "friends": []})
+
+        # Get user details for all friends
+        friends = list(db.baatchit_user.find(
+            {"user_comman_id": {"$in": friend_ids}},
+            {"_id": 0, "password": 0}
+        ))
+    return JSONResponse(content={"status": True, "friends": friends})
