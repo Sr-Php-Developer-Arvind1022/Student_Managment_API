@@ -1,5 +1,5 @@
 # Assuming this is in your websocket_demo.py or websocket_routes.py
-from typing import Optional
+from typing import Optional, Dict, List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Body
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,21 +8,27 @@ import json
 import logging
 import datetime
 import uuid
-from bson import ObjectId # <--- ADD THIS IMPORT for ObjectId type
+from bson import ObjectId
+from enum import Enum
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# If this code is in main.py, you need to revisit the previous advice about APIRouter.
-# For now, I'm fixing the ObjectId issue assuming this is the file running the WebSocket.
-# If you are using websocket_routes.py, apply this fix there.
-# If this is indeed main.py, then 'app = FastAPI()' only needs to be defined ONCE.
-# I'm providing the fix for the websocket_endpoint, regardless of where it resides now.
+# Call status enum
+class CallStatus(str, Enum):
+    RINGING = "ringing"
+    ONGOING = "ongoing"
+    ENDED = "ended"
+    REJECTED = "rejected"
+    MISSED = "missed"
 
-app = FastAPI() # If this is websocket_demo.py, this 'app' instance isn't directly used
-                # when mounted via include_router. If this is main.py, ensure it's the ONLY
-                # FastAPI() instance.
+# Call type enum
+class CallType(str, Enum):
+    AUDIO = "audio"
+    VIDEO = "video"
+
+app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
@@ -32,8 +38,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Store WebSocket connections
+# Store WebSocket connections for chat
 user_connections = {}
+
+# Store active calls and WebSocket connections for calls
+active_calls: Dict[str, Dict] = {}
+call_connections: Dict[str, List[WebSocket]] = {}
+
+# ====================== EXISTING CHAT WEBSOCKET ======================
 
 @app.websocket("/ws/chat/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: str):
@@ -76,8 +88,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                         # Insert the message
                         result = db.websocket_messages.insert_one(message_data)
                         # Add the _id from the insert operation to message_data
-                        # This is what's causing the ObjectId error later
-                        message_data["_id"] = str(result.inserted_id) # <--- CONVERT ObjectId TO STRING HERE
+                        message_data["_id"] = str(result.inserted_id)
                     logger.info("Message saved to database successfully.")
                 except Exception as e:
                     logger.error(f"Failed to save message to database: {e}", exc_info=True)
@@ -85,8 +96,6 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                     continue
 
                 # Prepare data for sending: Ensure all ObjectIds are strings
-                # This loop handles _id that might be present if retrieved from DB,
-                # though in this flow, it's primarily for the inserted_id.
                 serializable_message_data = {}
                 for k, v in message_data.items():
                     if isinstance(v, ObjectId):
@@ -97,13 +106,13 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                 # Send to receiver if connected
                 if receiver_id in user_connections:
                     for ws_conn in user_connections[receiver_id]:
-                        await ws_conn.send_text(json.dumps(serializable_message_data)) # <--- USE serializable_message_data
+                        await ws_conn.send_text(json.dumps(serializable_message_data))
                     logger.info(f"Message broadcasted to receiver {receiver_id}.")
                 else:
                     logger.info(f"Receiver {receiver_id} not currently connected. Message not broadcasted live.")
 
                 # Send back to sender (for immediate display and confirmation)
-                await websocket.send_text(json.dumps(serializable_message_data)) # <--- USE serializable_message_data
+                await websocket.send_text(json.dumps(serializable_message_data))
                 logger.debug(f"Message echoed back to sender {sender_id}.")
 
     except WebSocketDisconnect:
@@ -122,6 +131,496 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
             else:
                 logger.info(f"User {user_id} now has {len(user_connections[user_id])} active WebSocket(s) remaining.")
 
+# ====================== NEW CALL WEBSOCKET ======================
+
+@app.websocket("/ws/call/{user_id}")
+async def call_websocket_endpoint(websocket: WebSocket, user_id: str):
+    """
+    WebSocket endpoint for handling audio/video calls
+    """
+    logger.info(f"Call WebSocket connection attempt for user: {user_id}")
+    await websocket.accept()
+    logger.info(f"Call WebSocket connection accepted for user: {user_id}")
+
+    # Add user to call connections
+    if user_id not in call_connections:
+        call_connections[user_id] = []
+    call_connections[user_id].append(websocket)
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            payload = json.loads(data)
+            
+            message_type = payload.get("type")
+            
+            if message_type == "initiate_call":
+                await handle_initiate_call(websocket, payload, user_id)
+            elif message_type == "accept_call":
+                await handle_accept_call(websocket, payload, user_id)
+            elif message_type == "reject_call":
+                await handle_reject_call(websocket, payload, user_id)
+            elif message_type == "end_call":
+                await handle_end_call(websocket, payload, user_id)
+            elif message_type == "offer":
+                await handle_webrtc_offer(websocket, payload, user_id)
+            elif message_type == "answer":
+                await handle_webrtc_answer(websocket, payload, user_id)
+            elif message_type == "ice_candidate":
+                await handle_ice_candidate(websocket, payload, user_id)
+            elif message_type == "call_status":
+                await handle_call_status_update(websocket, payload, user_id)
+            else:
+                logger.warning(f"Unknown message type: {message_type} from user: {user_id}")
+
+    except WebSocketDisconnect:
+        logger.info(f"Call WebSocket disconnected for user: {user_id}")
+        await handle_user_disconnect(user_id)
+    except json.JSONDecodeError:
+        logger.warning(f"Received malformed JSON from {user_id} in call WebSocket")
+        await websocket.send_text(json.dumps({"error": "Invalid JSON format"}))
+    except Exception as e:
+        logger.error(f"Error in call WebSocket for {user_id}: {e}", exc_info=True)
+    finally:
+        # Clean up connections
+        if user_id in call_connections and websocket in call_connections[user_id]:
+            call_connections[user_id].remove(websocket)
+            if not call_connections[user_id]:
+                del call_connections[user_id]
+
+# ====================== CALL HANDLER FUNCTIONS ======================
+
+async def handle_initiate_call(websocket: WebSocket, payload: Dict, caller_id: str):
+    """
+    Handle call initiation
+    """
+    receiver_id = payload.get("receiver_id")
+    call_type = payload.get("call_type", CallType.AUDIO)
+    
+    if not receiver_id:
+        await websocket.send_text(json.dumps({
+            "type": "error",
+            "message": "Receiver ID is required"
+        }))
+        return
+
+    # Generate unique call ID
+    call_id = str(uuid.uuid4())
+    
+    # Check if receiver is online
+    if receiver_id not in call_connections:
+        await websocket.send_text(json.dumps({
+            "type": "call_failed",
+            "message": "User is not available",
+            "call_id": call_id
+        }))
+        return
+
+    # Create call record
+    call_data = {
+        "call_id": call_id,
+        "caller_id": caller_id,
+        "receiver_id": receiver_id,
+        "call_type": call_type,
+        "status": CallStatus.RINGING,
+        "started_at": datetime.datetime.utcnow().isoformat(),
+        "ended_at": None,
+        "duration": None
+    }
+
+    # Store active call
+    active_calls[call_id] = call_data
+
+    # Save call to database
+    try:
+        with get_db() as db:
+            db.call_history.insert_one(call_data.copy())
+        logger.info(f"Call record saved: {call_id}")
+    except Exception as e:
+        logger.error(f"Failed to save call record: {e}")
+
+    # Notify receiver about incoming call
+    incoming_call_data = {
+        "type": "incoming_call",
+        "call_id": call_id,
+        "caller_id": caller_id,
+        "call_type": call_type,
+        "timestamp": call_data["started_at"]
+    }
+
+    # Get caller details
+    try:
+        with get_db() as db:
+            caller = db.baatchit_user.find_one(
+                {"user_comman_id": caller_id},
+                {"_id": 0, "full_name": 1, "user_comman_id": 1}
+            )
+            if caller:
+                incoming_call_data["caller_name"] = caller["full_name"]
+    except Exception as e:
+        logger.error(f"Failed to get caller details: {e}")
+
+    # Send to receiver
+    for ws_conn in call_connections[receiver_id]:
+        try:
+            await ws_conn.send_text(json.dumps(incoming_call_data))
+        except Exception as e:
+            logger.error(f"Failed to send incoming call to receiver: {e}")
+
+    # Confirm call initiation to caller
+    await websocket.send_text(json.dumps({
+        "type": "call_initiated",
+        "call_id": call_id,
+        "receiver_id": receiver_id,
+        "status": CallStatus.RINGING
+    }))
+
+    logger.info(f"Call initiated: {call_id} from {caller_id} to {receiver_id}")
+
+async def handle_accept_call(websocket: WebSocket, payload: Dict, user_id: str):
+    """
+    Handle call acceptance
+    """
+    call_id = payload.get("call_id")
+    
+    if not call_id or call_id not in active_calls:
+        await websocket.send_text(json.dumps({
+            "type": "error",
+            "message": "Invalid call ID"
+        }))
+        return
+
+    call_data = active_calls[call_id]
+    
+    # Update call status
+    call_data["status"] = CallStatus.ONGOING
+    call_data["accepted_at"] = datetime.datetime.utcnow().isoformat()
+
+    # Update database
+    try:
+        with get_db() as db:
+            db.call_history.update_one(
+                {"call_id": call_id},
+                {"$set": {
+                    "status": CallStatus.ONGOING,
+                    "accepted_at": call_data["accepted_at"]
+                }}
+            )
+    except Exception as e:
+        logger.error(f"Failed to update call status: {e}")
+
+    # Notify caller that call was accepted
+    caller_id = call_data["caller_id"]
+    if caller_id in call_connections:
+        for ws_conn in call_connections[caller_id]:
+            try:
+                await ws_conn.send_text(json.dumps({
+                    "type": "call_accepted",
+                    "call_id": call_id,
+                    "receiver_id": user_id
+                }))
+            except Exception as e:
+                logger.error(f"Failed to notify caller of call acceptance: {e}")
+
+    # Confirm acceptance to receiver
+    await websocket.send_text(json.dumps({
+        "type": "call_accepted_confirm",
+        "call_id": call_id,
+        "status": CallStatus.ONGOING
+    }))
+
+    logger.info(f"Call accepted: {call_id} by {user_id}")
+
+async def handle_reject_call(websocket: WebSocket, payload: Dict, user_id: str):
+    """
+    Handle call rejection
+    """
+    call_id = payload.get("call_id")
+    
+    if not call_id or call_id not in active_calls:
+        await websocket.send_text(json.dumps({
+            "type": "error",
+            "message": "Invalid call ID"
+        }))
+        return
+
+    call_data = active_calls[call_id]
+    
+    # Update call status
+    call_data["status"] = CallStatus.REJECTED
+    call_data["ended_at"] = datetime.datetime.utcnow().isoformat()
+
+    # Update database
+    try:
+        with get_db() as db:
+            db.call_history.update_one(
+                {"call_id": call_id},
+                {"$set": {
+                    "status": CallStatus.REJECTED,
+                    "ended_at": call_data["ended_at"]
+                }}
+            )
+    except Exception as e:
+        logger.error(f"Failed to update call status: {e}")
+
+    # Notify caller that call was rejected
+    caller_id = call_data["caller_id"]
+    if caller_id in call_connections:
+        for ws_conn in call_connections[caller_id]:
+            try:
+                await ws_conn.send_text(json.dumps({
+                    "type": "call_rejected",
+                    "call_id": call_id,
+                    "receiver_id": user_id
+                }))
+            except Exception as e:
+                logger.error(f"Failed to notify caller of call rejection: {e}")
+
+    # Remove from active calls
+    del active_calls[call_id]
+
+    logger.info(f"Call rejected: {call_id} by {user_id}")
+
+async def handle_end_call(websocket: WebSocket, payload: Dict, user_id: str):
+    """
+    Handle call ending
+    """
+    call_id = payload.get("call_id")
+    
+    if not call_id or call_id not in active_calls:
+        await websocket.send_text(json.dumps({
+            "type": "error",
+            "message": "Invalid call ID"
+        }))
+        return
+
+    call_data = active_calls[call_id]
+    
+    # Calculate duration if call was ongoing
+    duration = None
+    if call_data["status"] == CallStatus.ONGOING and "accepted_at" in call_data:
+        start_time = datetime.datetime.fromisoformat(call_data["accepted_at"])
+        end_time = datetime.datetime.utcnow()
+        duration = int((end_time - start_time).total_seconds())
+
+    # Update call status
+    call_data["status"] = CallStatus.ENDED
+    call_data["ended_at"] = datetime.datetime.utcnow().isoformat()
+    call_data["duration"] = duration
+
+    # Update database
+    try:
+        with get_db() as db:
+            db.call_history.update_one(
+                {"call_id": call_id},
+                {"$set": {
+                    "status": CallStatus.ENDED,
+                    "ended_at": call_data["ended_at"],
+                    "duration": duration
+                }}
+            )
+    except Exception as e:
+        logger.error(f"Failed to update call status: {e}")
+
+    # Notify other participant
+    other_user_id = call_data["caller_id"] if user_id == call_data["receiver_id"] else call_data["receiver_id"]
+    if other_user_id in call_connections:
+        for ws_conn in call_connections[other_user_id]:
+            try:
+                await ws_conn.send_text(json.dumps({
+                    "type": "call_ended",
+                    "call_id": call_id,
+                    "ended_by": user_id,
+                    "duration": duration
+                }))
+            except Exception as e:
+                logger.error(f"Failed to notify other user of call end: {e}")
+
+    # Confirm end to initiator
+    await websocket.send_text(json.dumps({
+        "type": "call_ended_confirm",
+        "call_id": call_id,
+        "duration": duration
+    }))
+
+    # Remove from active calls
+    del active_calls[call_id]
+
+    logger.info(f"Call ended: {call_id} by {user_id}, duration: {duration}s")
+
+async def handle_webrtc_offer(websocket: WebSocket, payload: Dict, user_id: str):
+    """
+    Handle WebRTC offer for peer-to-peer connection
+    """
+    call_id = payload.get("call_id")
+    offer = payload.get("offer")
+    
+    if not call_id or call_id not in active_calls:
+        await websocket.send_text(json.dumps({
+            "type": "error",
+            "message": "Invalid call ID"
+        }))
+        return
+
+    call_data = active_calls[call_id]
+    
+    # Forward offer to the other participant
+    other_user_id = call_data["caller_id"] if user_id == call_data["receiver_id"] else call_data["receiver_id"]
+    if other_user_id in call_connections:
+        for ws_conn in call_connections[other_user_id]:
+            try:
+                await ws_conn.send_text(json.dumps({
+                    "type": "offer",
+                    "call_id": call_id,
+                    "offer": offer,
+                    "from": user_id
+                }))
+            except Exception as e:
+                logger.error(f"Failed to forward WebRTC offer: {e}")
+
+async def handle_webrtc_answer(websocket: WebSocket, payload: Dict, user_id: str):
+    """
+    Handle WebRTC answer
+    """
+    call_id = payload.get("call_id")
+    answer = payload.get("answer")
+    
+    if not call_id or call_id not in active_calls:
+        await websocket.send_text(json.dumps({
+            "type": "error",
+            "message": "Invalid call ID"
+        }))
+        return
+
+    call_data = active_calls[call_id]
+    
+    # Forward answer to the other participant
+    other_user_id = call_data["caller_id"] if user_id == call_data["receiver_id"] else call_data["receiver_id"]
+    if other_user_id in call_connections:
+        for ws_conn in call_connections[other_user_id]:
+            try:
+                await ws_conn.send_text(json.dumps({
+                    "type": "answer",
+                    "call_id": call_id,
+                    "answer": answer,
+                    "from": user_id
+                }))
+            except Exception as e:
+                logger.error(f"Failed to forward WebRTC answer: {e}")
+
+async def handle_ice_candidate(websocket: WebSocket, payload: Dict, user_id: str):
+    """
+    Handle ICE candidate exchange
+    """
+    call_id = payload.get("call_id")
+    candidate = payload.get("candidate")
+    
+    if not call_id or call_id not in active_calls:
+        return  # Silently ignore invalid ICE candidates
+
+    call_data = active_calls[call_id]
+    
+    # Forward ICE candidate to the other participant
+    other_user_id = call_data["caller_id"] if user_id == call_data["receiver_id"] else call_data["receiver_id"]
+    if other_user_id in call_connections:
+        for ws_conn in call_connections[other_user_id]:
+            try:
+                await ws_conn.send_text(json.dumps({
+                    "type": "ice_candidate",
+                    "call_id": call_id,
+                    "candidate": candidate,
+                    "from": user_id
+                }))
+            except Exception as e:
+                logger.error(f"Failed to forward ICE candidate: {e}")
+
+async def handle_call_status_update(websocket: WebSocket, payload: Dict, user_id: str):
+    """
+    Handle call status updates (mute, unmute, video on/off, etc.)
+    """
+    call_id = payload.get("call_id")
+    status_update = payload.get("status_update")
+    
+    if not call_id or call_id not in active_calls:
+        return
+
+    call_data = active_calls[call_id]
+    
+    # Forward status update to the other participant
+    other_user_id = call_data["caller_id"] if user_id == call_data["receiver_id"] else call_data["receiver_id"]
+    if other_user_id in call_connections:
+        for ws_conn in call_connections[other_user_id]:
+            try:
+                await ws_conn.send_text(json.dumps({
+                    "type": "call_status_update",
+                    "call_id": call_id,
+                    "status_update": status_update,
+                    "from": user_id
+                }))
+            except Exception as e:
+                logger.error(f"Failed to forward call status update: {e}")
+
+async def handle_user_disconnect(user_id: str):
+    """
+    Handle user disconnection - end any active calls
+    """
+    # Find active calls for this user
+    calls_to_end = []
+    for call_id, call_data in active_calls.items():
+        if call_data["caller_id"] == user_id or call_data["receiver_id"] == user_id:
+            calls_to_end.append(call_id)
+
+    # End all active calls for this user
+    for call_id in calls_to_end:
+        call_data = active_calls[call_id]
+        other_user_id = call_data["caller_id"] if user_id == call_data["receiver_id"] else call_data["receiver_id"]
+        
+        # Update call status
+        call_data["status"] = CallStatus.ENDED
+        call_data["ended_at"] = datetime.datetime.utcnow().isoformat()
+        
+        # Calculate duration if applicable
+        duration = None
+        if "accepted_at" in call_data:
+            start_time = datetime.datetime.fromisoformat(call_data["accepted_at"])
+            end_time = datetime.datetime.utcnow()
+            duration = int((end_time - start_time).total_seconds())
+            call_data["duration"] = duration
+
+        # Update database
+        try:
+            with get_db() as db:
+                db.call_history.update_one(
+                    {"call_id": call_id},
+                    {"$set": {
+                        "status": CallStatus.ENDED,
+                        "ended_at": call_data["ended_at"],
+                        "duration": duration
+                    }}
+                )
+        except Exception as e:
+            logger.error(f"Failed to update call status on disconnect: {e}")
+
+        # Notify other participant
+        if other_user_id in call_connections:
+            for ws_conn in call_connections[other_user_id]:
+                try:
+                    await ws_conn.send_text(json.dumps({
+                        "type": "call_ended",
+                        "call_id": call_id,
+                        "ended_by": user_id,
+                        "reason": "disconnected",
+                        "duration": duration
+                    }))
+                except Exception as e:
+                    logger.error(f"Failed to notify call end on disconnect: {e}")
+
+        # Remove from active calls
+        del active_calls[call_id]
+
+    logger.info(f"Ended {len(calls_to_end)} active calls for disconnected user: {user_id}")
+
+# ====================== EXISTING CHAT ENDPOINTS ======================
 
 @app.get("/chat-history")
 def get_chat_history(sender_id: str = Query(...), receiver_id: str = Query(...)):
@@ -133,9 +632,9 @@ def get_chat_history(sender_id: str = Query(...), receiver_id: str = Query(...))
                     {"sender_id": sender_id, "receiver_id": receiver_id},
                     {"sender_id": receiver_id, "receiver_id": sender_id}
                 ]
-            }).sort("timestamp", 1)) # Removing {"_id": 0} projection temporarily to show _id
+            }).sort("timestamp", 1))
 
-            # Crucially, convert ObjectId to string for ALL messages fetched for history
+            # Convert ObjectId to string for ALL messages fetched for history
             for msg_doc in messages:
                 if "_id" in msg_doc:
                     msg_doc["_id"] = str(msg_doc["_id"])
@@ -145,7 +644,6 @@ def get_chat_history(sender_id: str = Query(...), receiver_id: str = Query(...))
     except Exception as e:
         logger.error(f"Failed to fetch chat history: {e}", exc_info=True)
         return {"status": False, "message": "Failed to retrieve chat history", "error": str(e)}
-
 
 @app.post("/baatchit/user/create")
 def create_baatchit_user(
@@ -181,29 +679,24 @@ def search_baatchit_user(
     email: str = Query(None),
     mobile_number: str = Query(None)
 ):
-    # If no search parameters provided, return empty result
     if not query and not full_name and not email and not mobile_number:
         return JSONResponse(content={"status": True, "users": []})
     
     search_conditions = []
     
-    # Handle general query parameter (searches across multiple fields)
     if query:
         query = query.strip()
-        if len(query) < 2:  # Require at least 2 characters
+        if len(query) < 2:
             return JSONResponse(content={"status": True, "users": []})
             
-        # Create regex pattern for case-insensitive search
         regex_pattern = {"$regex": query, "$options": "i"}
         
-        # Search across multiple fields
         search_conditions.extend([
             {"full_name": regex_pattern},
             {"email": regex_pattern},
             {"mobile_number": regex_pattern}
         ])
     
-    # Handle specific field searches
     if full_name:
         search_conditions.append({
             "full_name": {"$regex": full_name, "$options": "i"}
@@ -219,7 +712,6 @@ def search_baatchit_user(
             "mobile_number": {"$regex": mobile_number, "$options": "i"}
         })
     
-    # Build MongoDB query
     if len(search_conditions) == 1:
         mongo_query = search_conditions[0]
     elif len(search_conditions) > 1:
@@ -229,13 +721,11 @@ def search_baatchit_user(
     
     try:
         with get_db() as db:
-            # Execute search with limit to prevent too many results
             users = list(db.baatchit_user.find(
                 mongo_query, 
                 {"_id": 0, "password": 0}
             ).limit(50))
             
-            # Sort by relevance if query is provided
             if query:
                 users.sort(key=lambda x: (
                     0 if x.get('full_name', '').lower().startswith(query.lower()) else 1,
