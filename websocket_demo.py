@@ -243,7 +243,7 @@ def approve_baatchit_request(
 ):
     with get_db() as db:
         result = db.baatchit_request.update_one(
-            {"from_user": from_user, "to_user": to_user, "status": "pending"},
+            {"from_user": to_user, "to_user": from_user, "status": "pending"},
             {"$set": {"status": "approved", "approved_at": datetime.datetime.utcnow().isoformat()}}
         )
         if result.modified_count > 0:
