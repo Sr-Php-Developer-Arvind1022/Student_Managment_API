@@ -220,8 +220,15 @@ def send_baatchit_request(
     to_user: str = Body(...)
 ):
     with get_db() as db:
+        # Check if a request from from_user to to_user already exists
         if db.baatchit_request.find_one({"from_user": from_user, "to_user": to_user}):
             return JSONResponse(content={"status": False, "message": "Request already sent"})
+        
+        # Check if to_user has already sent a request to from_user
+        if db.baatchit_request.find_one({"from_user": to_user, "to_user": from_user}):
+            return JSONResponse(content={"status": False, "message": "User has already sent you a request"})
+        
+        # Insert the new request
         db.baatchit_request.insert_one({
             "from_user": from_user,
             "to_user": to_user,
@@ -229,7 +236,6 @@ def send_baatchit_request(
             "created_at": datetime.datetime.utcnow().isoformat()
         })
     return JSONResponse(content={"status": True, "message": "Request sent"})
-
 @app.post("/baatchit/approve-request")
 def approve_baatchit_request(
     from_user: str = Body(...),
