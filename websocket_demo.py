@@ -286,7 +286,7 @@ async def handle_accept_call(websocket: WebSocket, payload: Dict, user_id: str):
     if not call_id or call_id not in active_calls:
         await websocket.send_text(json.dumps({
             "type": "error",
-            "message": "Invalid call ID"
+            "message": "Invalid call ID1"
         }))
         return
 
@@ -340,7 +340,7 @@ async def handle_reject_call(websocket: WebSocket, payload: Dict, user_id: str):
     if not call_id or call_id not in active_calls:
         await websocket.send_text(json.dumps({
             "type": "error",
-            "message": "Invalid call ID"
+            "message": "Invalid call ID2"
         }))
         return
 
@@ -390,7 +390,7 @@ async def handle_end_call(websocket: WebSocket, payload: Dict, user_id: str):
     if not call_id or call_id not in active_calls:
         await websocket.send_text(json.dumps({
             "type": "error",
-            "message": "Invalid call ID"
+            "message": "Invalid call ID3"
         }))
         return
 
@@ -458,7 +458,7 @@ async def handle_webrtc_offer(websocket: WebSocket, payload: Dict, user_id: str)
     if not call_id or call_id not in active_calls:
         await websocket.send_text(json.dumps({
             "type": "error",
-            "message": "Invalid call ID"
+            "message": "Invalid call ID4"
         }))
         return
 
@@ -488,7 +488,7 @@ async def handle_webrtc_answer(websocket: WebSocket, payload: Dict, user_id: str
     if not call_id or call_id not in active_calls:
         await websocket.send_text(json.dumps({
             "type": "error",
-            "message": "Invalid call ID"
+            "message": "Invalid call ID5"
         }))
         return
 
