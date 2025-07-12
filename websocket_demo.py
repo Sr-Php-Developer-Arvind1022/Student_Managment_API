@@ -267,29 +267,43 @@ def get_received_requests(common_id: str = Query(...)):
     """
     Returns all chat requests received by the user (to_user = my common_id),
     including sender's name and sender's common_id.
+    Excludes duplicate requests from same sender.
     """
     with get_db() as db:
         # Find all requests where to_user is my common_id and status is pending
         requests = list(db.baatchit_request.find(
-            {"to_user": common_id, "status": "pending"}
-        ))
+            {"to_user": common_id, "status": "pending"},
+            {"_id": 0, "from_user": 1, "status": 1, "created_at": 1}
+        ).sort("created_at", -1))
 
-        # For each request, get sender's details from baatchit_user
-        result = []
+        # Use dictionary to keep only latest request from each sender
+        unique_requests = {}
         for req in requests:
+            from_user = req["from_user"]
+            if from_user not in unique_requests:
+                unique_requests[from_user] = req
+
+        # Get sender details for unique requests
+        result = []
+        for from_user, req in unique_requests.items():
             sender = db.baatchit_user.find_one(
-                {"user_comman_id": req["from_user"]},
+                {"user_comman_id": from_user},
                 {"_id": 0, "full_name": 1, "user_comman_id": 1}
             )
-            result.append({
-                "from_user": req["from_user"],
-                "sender_name": sender["full_name"] if sender else None,
-                "sender_comman_id": sender["user_comman_id"] if sender else None,
-                "request_status": req.get("status"),
-                "request_created_at": req.get("created_at")
-            })
+            
+            if sender:  # Only include if sender exists
+                result.append({
+                    "from_user": from_user,
+                    "sender_name": sender["full_name"],
+                    "sender_comman_id": sender["user_comman_id"],
+                    "request_status": req.get("status"),
+                    "request_created_at": req.get("created_at")
+                })
 
-    return JSONResponse(content={"status": True, "requests": result})
+        # Sort by creation time (newest first)
+        result.sort(key=lambda x: x.get("request_created_at") or "", reverse=True)
+
+    return JSONResponse(content={"status": True, "requests": result, "message": "Received requests fetched successfully"})
 
 @app.get("/baatchit/friends")
 def get_my_friends(common_id: str = Query(...)):
