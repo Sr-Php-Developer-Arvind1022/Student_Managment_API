@@ -176,20 +176,77 @@ def create_baatchit_user(
 
 @app.get("/baatchit/user/search")
 def search_baatchit_user(
+    query: str = Query(None),
     full_name: str = Query(None),
     email: str = Query(None),
     mobile_number: str = Query(None)
 ):
-    query = {}
+    # If no search parameters provided, return empty result
+    if not query and not full_name and not email and not mobile_number:
+        return JSONResponse(content={"status": True, "users": []})
+    
+    search_conditions = []
+    
+    # Handle general query parameter (searches across multiple fields)
+    if query:
+        query = query.strip()
+        if len(query) < 2:  # Require at least 2 characters
+            return JSONResponse(content={"status": True, "users": []})
+            
+        # Create regex pattern for case-insensitive search
+        regex_pattern = {"$regex": query, "$options": "i"}
+        
+        # Search across multiple fields
+        search_conditions.extend([
+            {"full_name": regex_pattern},
+            {"email": regex_pattern},
+            {"mobile_number": regex_pattern}
+        ])
+    
+    # Handle specific field searches
     if full_name:
-        query["full_name"] = {"$regex": full_name, "$options": "i"}
+        search_conditions.append({
+            "full_name": {"$regex": full_name, "$options": "i"}
+        })
+    
     if email:
-        query["email"] = email
+        search_conditions.append({
+            "email": {"$regex": email, "$options": "i"}
+        })
+    
     if mobile_number:
-        query["mobile_number"] = mobile_number
-    with get_db() as db:
-        users = list(db.baatchit_user.find(query, {"_id": 0, "password": 0}))
-    return JSONResponse(content={"status": True, "users": users})
+        search_conditions.append({
+            "mobile_number": {"$regex": mobile_number, "$options": "i"}
+        })
+    
+    # Build MongoDB query
+    if len(search_conditions) == 1:
+        mongo_query = search_conditions[0]
+    elif len(search_conditions) > 1:
+        mongo_query = {"$or": search_conditions}
+    else:
+        mongo_query = {}
+    
+    try:
+        with get_db() as db:
+            # Execute search with limit to prevent too many results
+            users = list(db.baatchit_user.find(
+                mongo_query, 
+                {"_id": 0, "password": 0}
+            ).limit(50))
+            
+            # Sort by relevance if query is provided
+            if query:
+                users.sort(key=lambda x: (
+                    0 if x.get('full_name', '').lower().startswith(query.lower()) else 1,
+                    x.get('full_name', '').lower()
+                ))
+        
+        return JSONResponse(content={"status": True, "users": users})
+        
+    except Exception as e:
+        print(f"Error in search: {str(e)}")
+        return JSONResponse(content={"status": True, "users": []})
 
 @app.post("/baatchit/user/login")
 def baatchit_user_login(
