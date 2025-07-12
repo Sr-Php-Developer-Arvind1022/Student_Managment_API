@@ -293,7 +293,7 @@ def get_received_requests(common_id: str = Query(...)):
             
             if sender:  # Only include if sender exists
                 result.append({
-                    "from_user": from_user,
+                    "from_user": common_id,
                     "sender_name": sender["full_name"],
                     "sender_comman_id": sender["user_comman_id"],
                     "request_status": req.get("status"),
