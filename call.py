@@ -26,7 +26,7 @@ async def get(request: Request, call_id: Optional[str] = None):
 
         <script>
             const callId = "{call_id}";
-            const ws = new WebSocket(`ws://${{location.host}}/call/ws/${{callId}}`);
+            const ws = new WebSocket(`wss://${{location.host}}/call/ws/${{callId}}`);
             const localVideo = document.getElementById("localVideo");
             const remoteVideo = document.getElementById("remoteVideo");
             const peer = new RTCPeerConnection();
