@@ -9,13 +9,14 @@ from Student import Api as student_api
 from fastapi.middleware.cors import CORSMiddleware
 from websocket_demo import app as websocket_app
 from db import get_db
+from call import app as call_app
 
 app = FastAPI()
 origins = ["*"] 
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,            # 👈 List of allowed origins
+    allow_origins=["*"],              # 👈 List of allowed origins
     allow_credentials=True,
     allow_methods=["*"],              # 👈 Allow all methods like GET, POST
     allow_headers=["*"],              # 👈 Allow all headers
@@ -47,6 +48,7 @@ def admin_login(request: LoginRequest):
 app.include_router(admin_api.router)
 app.include_router(student_api.router)
 app.mount("/ws-demo", websocket_app)
+app.mount("/call", call_app)
 # Student registration API
 # @app.post("/student/register")  
 # def student_register(name: str = Body(...), email: str = Body(...), password: str = Body(...)):
