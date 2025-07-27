@@ -26,145 +26,76 @@ async def get(request: Request, call_id: Optional[str] = None):
 
         <script>
             const callId = "{call_id}";
-            let ws;
+            const ws = new WebSocket(`wss://${{location.host}}/call/ws/${{callId}}`);
             const localVideo = document.getElementById("localVideo");
             const remoteVideo = document.getElementById("remoteVideo");
+            const peer = new RTCPeerConnection();
 
-            const peer = new RTCPeerConnection({{
-                iceServers: [
-                    {{ urls: "stun:stun.l.google.com:19302" }},
-                    {{
-                        urls: "turn:relay1.expressturn.com:3478",
-                        username: "efwefwe",
-                        credential: "wefwefwe"
-                    }}
-                ]
+            // Both caller and receiver get user media
+            navigator.mediaDevices.getUserMedia({{ video: true, audio: true }}).then(stream => {{
+                console.log("Got local media stream");
+                localVideo.srcObject = stream;
+                stream.getTracks().forEach(track => peer.addTrack(track, stream));
+
+                if (callId === "1") {{
+                    peer.onnegotiationneeded = async () => {{
+                        console.log("Starting negotiation...");
+                        const offer = await peer.createOffer();
+                        await peer.setLocalDescription(offer);
+                        ws.send(JSON.stringify({{ type: "offer", offer: offer }}));
+                    }};
+                }}
+            }}).catch(e => {{
+                console.error("Error getting user media:", e);
             }});
 
-            // ICE throttling
-            let iceQueue = [];
-            let iceSending = false;
-
-            function sendICEQueue() {{
-                if (iceSending || iceQueue.length === 0 || ws.readyState !== WebSocket.OPEN) return;
-                iceSending = true;
-                const candidate = iceQueue.shift();
-                ws.send(JSON.stringify({{ type: "ice", candidate }}));
-                setTimeout(() => {{
-                    iceSending = false;
-                    sendICEQueue();
-                }}, 300);
-            }}
+            peer.ontrack = (event) => {{
+                console.log("Received remote track:", event.streams);
+                if (event.streams && event.streams[0]) {{
+                    remoteVideo.srcObject = event.streams[0];
+                }} else {{
+                    console.warn("No streams available in ontrack event");
+                }}
+            }};
 
             peer.onicecandidate = (event) => {{
                 if (event.candidate) {{
-                    iceQueue.push(event.candidate);
-                    sendICEQueue();
+                    console.log("Sending ICE candidate:", event.candidate);
+                    ws.send(JSON.stringify({{ type: "ice", candidate: event.candidate }}));
                 }}
             }};
 
             peer.oniceconnectionstatechange = () => {{
-                console.log("ICE state:", peer.iceConnectionState);
+                console.log("ICE connection state changed:", peer.iceConnectionState);
             }};
 
-            peer.ontrack = (event) => {{
-                if (event.streams && event.streams[0]) {{
-                    remoteVideo.srcObject = event.streams[0];
+            ws.onmessage = async (event) => {{
+                const message = JSON.parse(event.data);
+
+                if (message.type === "offer") {{
+                    console.log("Received offer");
+                    await peer.setRemoteDescription(new RTCSessionDescription(message.offer));
+                    const answer = await peer.createAnswer();
+                    await peer.setLocalDescription(answer);
+                    ws.send(JSON.stringify({{ type: "answer", answer: answer }}));
+                }}
+
+                if (message.type === "answer") {{
+                    console.log("Received answer");
+                    await peer.setRemoteDescription(new RTCSessionDescription(message.answer));
+                }}
+
+                if (message.type === "ice") {{
+                    try {{
+                        console.log("Adding ICE candidate");
+                        await peer.addIceCandidate(new RTCIceCandidate(message.candidate));
+                    }} catch (e) {{
+                        console.error("Error adding ICE candidate:", e);
+                    }}
                 }}
             }};
 
-            async function getMediaWithTimeout(timeout = 10000) {{
-                return Promise.race([
-                    navigator.mediaDevices.getUserMedia({{ video: true, audio: true }}),
-                    new Promise((_, reject) =>
-                        setTimeout(() => reject(new Error("Media access timeout")), timeout)
-                    )
-                ]);
-            }}
-
-            async function startCall() {{
-                try {{
-                    const stream = await getMediaWithTimeout();
-                    localVideo.srcObject = stream;
-                    stream.getTracks().forEach(track => peer.addTrack(track, stream));
-
-                    if (callId === "1") {{
-                        peer.onnegotiationneeded = async () => {{
-                            const offer = await peer.createOffer();
-                            await retryOfferSend(offer);
-                        }};
-                    }}
-                }} catch (e) {{
-                    alert("Failed to access camera/mic: " + e.message);
-                }}
-            }}
-
-            async function retryOfferSend(offer, attempt = 1) {{
-                try {{
-                    await peer.setLocalDescription(offer);
-                    ws.send(JSON.stringify({{ type: "offer", offer }}));
-                }} catch (e) {{
-                    if (attempt < 3) {{
-                        console.warn("Retrying offer...", attempt);
-                        setTimeout(() => retryOfferSend(offer, attempt + 1), 1000);
-                    }} else {{
-                        console.error("Offer send failed");
-                    }}
-                }}
-            }}
-
-            function connectWebSocket() {{
-                ws = new WebSocket(`ws://${{location.host}}/ws/${{callId}}`);
-
-                ws.onopen = () => {{
-                    console.log("WebSocket connected");
-                }};
-
-                ws.onclose = () => {{
-                    console.warn("WebSocket closed. Reconnecting in 2s...");
-                    setTimeout(connectWebSocket, 2000);
-                }};
-
-                ws.onerror = (e) => {{
-                    console.error("WebSocket error:", e);
-                    ws.close();
-                }};
-
-                ws.onmessage = async (event) => {{
-                    const message = JSON.parse(event.data);
-
-                    if (message.type === "offer") {{
-                        await peer.setRemoteDescription(new RTCSessionDescription(message.offer));
-                        const answer = await peer.createAnswer();
-                        await peer.setLocalDescription(answer);
-                        ws.send(JSON.stringify({{ type: "answer", answer }}));
-                    }}
-
-                    if (message.type === "answer") {{
-                        await peer.setRemoteDescription(new RTCSessionDescription(message.answer));
-                    }}
-
-                    if (message.type === "ice") {{
-                        try {{
-                            await peer.addIceCandidate(new RTCIceCandidate(message.candidate));
-                        }} catch (e) {{
-                            console.warn("ICE add failed, retrying...");
-                            setTimeout(async () => {{
-                                try {{
-                                    await peer.addIceCandidate(new RTCIceCandidate(message.candidate));
-                                }} catch (err2) {{
-                                    console.error("Retry failed:", err2);
-                                }}
-                            }}, 1000);
-                        }}
-                    }}
-                }};
-            }}
-
-            connectWebSocket();
-            startCall();
-
-            function sendMessage() {{
+            async function sendMessage() {{
                 const input = document.getElementById("messageInput");
                 alert("Message: " + input.value);
                 input.value = "";
@@ -187,3 +118,4 @@ async def websocket_endpoint(websocket: WebSocket, call_id: str):
                 await clients[target_id].send_text(data)
     except Exception:
         clients.pop(call_id, None)
+
