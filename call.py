@@ -1,11 +1,26 @@
-from fastapi import FastAPI, WebSocket, Request
+from fastapi import FastAPI, WebSocket, Request, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from typing import Optional
 import json
 import asyncio
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 clients = {}
+
+# Add CORS middleware if needed
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Configure as needed
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/")
 async def get(request: Request, call_id: Optional[str] = None):
@@ -307,30 +322,50 @@ async def get(request: Request, call_id: Optional[str] = None):
 async def websocket_endpoint(websocket: WebSocket, call_id: str):
     await websocket.accept()
     clients[call_id] = websocket
+    logger.info(f"Client {call_id} connected")
     
     try:
         while True:
             # Add timeout for receiving messages
             try:
                 data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                logger.info(f"Received data from {call_id}: {data[:100]}...")
+                
+                # Handle ping messages
+                try:
+                    message = json.loads(data)
+                    if message.get("type") == "ping":
+                        await websocket.send_text(json.dumps({"type": "pong"}))
+                        continue
+                except json.JSONDecodeError:
+                    pass
+                
                 target_id = "2" if call_id == "1" else "1"
                 
                 if target_id in clients:
                     try:
                         await clients[target_id].send_text(data)
+                        logger.info(f"Forwarded message from {call_id} to {target_id}")
                     except Exception as e:
-                        print(f"Error sending to target {target_id}: {e}")
+                        logger.error(f"Error sending to target {target_id}: {e}")
                         # Remove disconnected client
                         clients.pop(target_id, None)
+                else:
+                    logger.warning(f"Target client {target_id} not found")
                         
             except asyncio.TimeoutError:
                 # Send ping to keep connection alive
                 try:
                     await websocket.send_text(json.dumps({"type": "ping"}))
+                    logger.debug(f"Sent ping to {call_id}")
                 except:
+                    logger.error(f"Failed to send ping to {call_id}")
                     break
                     
+    except WebSocketDisconnect:
+        logger.info(f"Client {call_id} disconnected normally")
     except Exception as e:
-        print(f"WebSocket error for {call_id}: {e}")
+        logger.error(f"WebSocket error for {call_id}: {e}")
     finally:
         clients.pop(call_id, None)
+        logger.info(f"Cleaned up client {call_id}")
