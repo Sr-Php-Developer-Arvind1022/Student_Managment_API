@@ -3,24 +3,9 @@ from fastapi.responses import HTMLResponse
 from typing import Optional
 import json
 import asyncio
-import logging
-
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 app = FastAPI()
 clients = {}
-
-# Add CORS middleware if needed
-from fastapi.middleware.cors import CORSMiddleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Configure as needed
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 @app.get("/")
 async def get(request: Request, call_id: Optional[str] = None):
@@ -34,10 +19,10 @@ async def get(request: Request, call_id: Optional[str] = None):
         <title>Video Call - ID {call_id}</title>
         <style>
             .status {{
-                padding: 10px;
-                margin: 10px 0;
-                border-radius: 5px;
-                font-weight: bold;
+                padding: 8px;
+                margin: 8px 0;
+                border-radius: 4px;
+                font-size: 14px;
             }}
             .connected {{ background-color: #d4edda; color: #155724; }}
             .connecting {{ background-color: #fff3cd; color: #856404; }}
@@ -47,12 +32,12 @@ async def get(request: Request, call_id: Optional[str] = None):
     </head>
     <body>
         <h2>Call ID: {call_id}</h2>
-        <div id="status" class="status disconnected">Initializing...</div>
+        <div id="status" class="status connecting">Connecting...</div>
         
         <video id="localVideo" autoplay muted playsinline style="width: 45%; border: 1px solid gray;"></video>
         <video id="remoteVideo" autoplay playsinline style="width: 45%; border: 1px solid gray;"></video>
         <br><br>
-        <button id="reconnectBtn" onclick="reconnectCall()" style="display: none;">Reconnect Call</button>
+        <button id="reconnectBtn" onclick="reconnectCall()" style="display: none; background: #007bff; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;">Reconnect</button>
         <br><br>
         <input type="text" id="messageInput" placeholder="Message..." />
         <button onclick="sendMessage()">Send</button>
@@ -63,22 +48,23 @@ async def get(request: Request, call_id: Optional[str] = None):
             let peer = null;
             let localStream = null;
             let reconnectAttempts = 0;
-            let maxReconnectAttempts = 5;
+            let maxReconnectAttempts = 10;
             let reconnectTimeout = null;
+            let isManualDisconnect = false;
             
             const localVideo = document.getElementById("localVideo");
             const remoteVideo = document.getElementById("remoteVideo");
             const statusDiv = document.getElementById("status");
             const reconnectBtn = document.getElementById("reconnectBtn");
 
-            // ICE servers with STUN servers for better connectivity
-            const iceServers = {{
+            // ICE configuration with multiple STUN servers for better connectivity
+            const iceConfig = {{
                 iceServers: [
                     {{ urls: "stun:stun.l.google.com:19302" }},
                     {{ urls: "stun:stun1.l.google.com:19302" }},
                     {{ urls: "stun:stun2.l.google.com:19302" }},
-                    {{ urls: "stun:stun3.l.google.com:19302" }},
-                    {{ urls: "stun:stun4.l.google.com:19302" }}
+                    {{ urls: "stun:stun.services.mozilla.com" }},
+                    {{ urls: "stun:stun.stunprotocol.org" }}
                 ],
                 iceCandidatePoolSize: 10
             }};
@@ -88,144 +74,31 @@ async def get(request: Request, call_id: Optional[str] = None):
                 statusDiv.className = `status ${{className}}`;
             }}
 
-            function createPeerConnection() {{
-                if (peer) {{
-                    peer.close();
-                }}
-
-                peer = new RTCPeerConnection(iceServers);
-
-                // Add local stream to peer connection
-                if (localStream) {{
-                    localStream.getTracks().forEach(track => {{
-                        peer.addTrack(track, localStream);
-                    }});
-                }}
-
-                peer.ontrack = (event) => {{
-                    console.log("Received remote track:", event.streams);
-                    if (event.streams && event.streams[0]) {{
-                        remoteVideo.srcObject = event.streams[0];
-                        updateStatus("Connected", "connected");
-                    }}
-                }};
-
-                peer.onicecandidate = (event) => {{
-                    if (event.candidate && ws && ws.readyState === WebSocket.OPEN) {{
-                        console.log("Sending ICE candidate");
-                        ws.send(JSON.stringify({{ type: "ice", candidate: event.candidate }}));
-                    }}
-                }};
-
-                peer.oniceconnectionstatechange = () => {{
-                    console.log("ICE connection state changed:", peer.iceConnectionState);
-                    
-                    switch(peer.iceConnectionState) {{
-                        case 'connected':
-                        case 'completed':
-                            updateStatus("Connected", "connected");
-                            reconnectBtn.style.display = "none";
-                            reconnectAttempts = 0;
-                            break;
-                        case 'connecting':
-                            updateStatus("Connecting...", "connecting");
-                            break;
-                        case 'disconnected':
-                            updateStatus("Connection lost, trying to reconnect...", "reconnecting");
-                            scheduleReconnect();
-                            break;
-                        case 'failed':
-                            updateStatus("Connection failed", "disconnected");
-                            reconnectBtn.style.display = "block";
-                            break;
-                        case 'closed':
-                            updateStatus("Connection closed", "disconnected");
-                            break;
-                    }}
-                }};
-
-                peer.onconnectionstatechange = () => {{
-                    console.log("Connection state changed:", peer.connectionState);
-                    if (peer.connectionState === 'failed') {{
-                        scheduleReconnect();
-                    }}
-                }};
-
-                if (callId === "1") {{
-                    peer.onnegotiationneeded = async () => {{
-                        try {{
-                            console.log("Starting negotiation...");
-                            const offer = await peer.createOffer();
-                            await peer.setLocalDescription(offer);
-                            if (ws && ws.readyState === WebSocket.OPEN) {{
-                                ws.send(JSON.stringify({{ type: "offer", offer: offer }}));
-                            }}
-                        }} catch (e) {{
-                            console.error("Error during negotiation:", e);
-                        }}
-                    }};
-                }}
-            }}
-
-            function scheduleReconnect() {{
-                if (reconnectAttempts >= maxReconnectAttempts) {{
-                    updateStatus("Max reconnection attempts reached", "disconnected");
-                    reconnectBtn.style.display = "block";
-                    return;
-                }}
-
-                if (reconnectTimeout) {{
-                    clearTimeout(reconnectTimeout);
-                }}
-
-                reconnectAttempts++;
-                const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 10000); // Exponential backoff
-                
-                updateStatus(`Reconnecting in ${{Math.ceil(delay/1000)}} seconds... (attempt ${{reconnectAttempts}}/${{maxReconnectAttempts}})`, "reconnecting");
-                
-                reconnectTimeout = setTimeout(() => {{
-                    reconnectCall();
-                }}, delay);
-            }}
-
-            function connectWebSocket() {{
-                console.log("Current protocol:", window.location.protocol);
-                console.log("Current host:", window.location.host);
-                
+            function createWebSocket() {{
                 if (ws) {{
                     ws.close();
                 }}
 
-                // CRITICAL: Use wss:// for HTTPS and ws:// for HTTP
-                const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const wsUrl = `${{wsProtocol}}//${{window.location.host}}/ws/${{callId}}`;
+                // Use wss for HTTPS, ws for HTTP
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${{protocol}}//${{window.location.host}}/ws/${{callId}}`;
                 
-                console.log("Connecting to WebSocket:", wsUrl);
-                updateStatus("Connecting to server...", "connecting");
-                
-                try {{
-                    ws = new WebSocket(wsUrl);
-                }} catch (error) {{
-                    console.error("Error creating WebSocket:", error);
-                    updateStatus("Failed to create WebSocket connection", "disconnected");
-                    return;
-                }}
+                console.log("Connecting to:", wsUrl);
+                ws = new WebSocket(wsUrl);
 
                 ws.onopen = () => {{
-                    console.log("WebSocket connected successfully");
+                    console.log("WebSocket connected");
                     updateStatus("WebSocket connected", "connecting");
+                    reconnectAttempts = 0; // Reset on successful connection
                 }};
 
                 ws.onmessage = async (event) => {{
                     try {{
                         const message = JSON.parse(event.data);
 
-                        // Handle ping/pong messages
+                        // Handle keep-alive ping
                         if (message.type === "ping") {{
                             ws.send(JSON.stringify({{ type: "pong" }}));
-                            return;
-                        }}
-                        if (message.type === "pong") {{
                             return;
                         }}
 
@@ -256,60 +129,132 @@ async def get(request: Request, call_id: Optional[str] = None):
                 }};
 
                 ws.onclose = (event) => {{
-                    console.log("WebSocket disconnected:", event.code, event.reason);
-                    updateStatus("WebSocket disconnected", "disconnected");
-                    if (event.code !== 1000) {{ // Not a normal closure
+                    console.log("WebSocket closed:", event.code, event.reason);
+                    if (!isManualDisconnect && event.code !== 1000) {{
+                        updateStatus("Connection lost", "disconnected");
                         scheduleReconnect();
                     }}
                 }};
 
                 ws.onerror = (error) => {{
                     console.error("WebSocket error:", error);
-                    updateStatus("WebSocket connection error", "disconnected");
+                    updateStatus("Connection error", "disconnected");
                 }};
             }}
 
-            async function initializeCall() {{
-                try {{
-                    updateStatus("Getting camera and microphone...", "connecting");
-                    
-                    // Request media with constraints optimized for poor network
-                    const constraints = {{
-                        video: {{ 
-                            width: {{ ideal: 640, max: 640 }}, 
-                            height: {{ ideal: 480, max: 480 }},
-                            frameRate: {{ ideal: 15, max: 30 }}
-                        }}, 
-                        audio: {{ 
-                            echoCancellation: true,
-                            noiseSuppression: true,
-                            autoGainControl: true,
-                            sampleRate: 16000  // Lower sample rate for poor network
-                        }} 
-                    }};
-                    
-                    localStream = await navigator.mediaDevices.getUserMedia(constraints);
-                    
-                    console.log("Got local media stream");
-                    localVideo.srcObject = localStream;
-                    updateStatus("Camera and microphone ready", "connecting");
-                    
-                    createPeerConnection();
-                    connectWebSocket();
-                    
-                }} catch (e) {{
-                    console.error("Error getting user media:", e);
-                    let errorMessage = "Error accessing camera/microphone";
-                    
-                    if (e.name === 'NotAllowedError') {{
-                        errorMessage = "Camera/microphone access denied. Please allow permissions.";
-                    }} else if (e.name === 'NotFoundError') {{
-                        errorMessage = "No camera/microphone found";
-                    }} else if (e.name === 'NotReadableError') {{
-                        errorMessage = "Camera/microphone in use by another application";
+            function createPeerConnection() {{
+                if (peer) {{
+                    peer.close();
+                }}
+
+                peer = new RTCPeerConnection(iceConfig);
+
+                // Add local stream if available
+                if (localStream) {{
+                    localStream.getTracks().forEach(track => {{
+                        peer.addTrack(track, localStream);
+                    }});
+                }}
+
+                peer.ontrack = (event) => {{
+                    console.log("Received remote track:", event.streams);
+                    if (event.streams && event.streams[0]) {{
+                        remoteVideo.srcObject = event.streams[0];
+                        updateStatus("Call connected", "connected");
+                    }} else {{
+                        console.warn("No streams available in ontrack event");
                     }}
+                }};
+
+                peer.onicecandidate = (event) => {{
+                    if (event.candidate && ws && ws.readyState === WebSocket.OPEN) {{
+                        console.log("Sending ICE candidate:", event.candidate);
+                        ws.send(JSON.stringify({{ type: "ice", candidate: event.candidate }}));
+                    }}
+                }};
+
+                peer.oniceconnectionstatechange = () => {{
+                    console.log("ICE connection state changed:", peer.iceConnectionState);
                     
-                    updateStatus(errorMessage, "disconnected");
+                    switch(peer.iceConnectionState) {{
+                        case 'connected':
+                        case 'completed':
+                            updateStatus("Call connected", "connected");
+                            reconnectBtn.style.display = "none";
+                            break;
+                        case 'connecting':
+                        case 'checking':
+                            updateStatus("Connecting call...", "connecting");
+                            break;
+                        case 'disconnected':
+                            updateStatus("Call disconnected, reconnecting...", "reconnecting");
+                            // Try to reconnect after a short delay
+                            setTimeout(() => {{
+                                if (peer && peer.iceConnectionState === 'disconnected') {{
+                                    restartIce();
+                                }}
+                            }}, 2000);
+                            break;
+                        case 'failed':
+                            updateStatus("Call failed", "disconnected");
+                            reconnectBtn.style.display = "block";
+                            scheduleReconnect();
+                            break;
+                        case 'closed':
+                            updateStatus("Call ended", "disconnected");
+                            break;
+                    }}
+                }};
+
+                peer.onconnectionstatechange = () => {{
+                    console.log("Connection state changed:", peer.connectionState);
+                    if (peer.connectionState === 'failed') {{
+                        scheduleReconnect();
+                    }}
+                }};
+
+                // Setup negotiation for caller
+                if (callId === "1") {{
+                    peer.onnegotiationneeded = async () => {{
+                        try {{
+                            console.log("Starting negotiation...");
+                            const offer = await peer.createOffer();
+                            await peer.setLocalDescription(offer);
+                            if (ws && ws.readyState === WebSocket.OPEN) {{
+                                ws.send(JSON.stringify({{ type: "offer", offer: offer }}));
+                            }}
+                        }} catch (e) {{
+                            console.error("Error during negotiation:", e);
+                        }}
+                    }};
+                }}
+            }}
+
+            function scheduleReconnect() {{
+                if (reconnectAttempts >= maxReconnectAttempts) {{
+                    updateStatus("Connection failed. Click Reconnect to try again.", "disconnected");
+                    reconnectBtn.style.display = "block";
+                    return;
+                }}
+
+                if (reconnectTimeout) {{
+                    clearTimeout(reconnectTimeout);
+                }}
+
+                reconnectAttempts++;
+                const delay = Math.min(1000 + (reconnectAttempts * 1000), 5000); // 1s, 2s, 3s... max 5s
+                
+                updateStatus(`Reconnecting in ${{Math.ceil(delay/1000)}}s... (${{reconnectAttempts}}/${{maxReconnectAttempts}})`, "reconnecting");
+                
+                reconnectTimeout = setTimeout(() => {{
+                    initializeConnection();
+                }}, delay);
+            }}
+
+            function restartIce() {{
+                if (peer && peer.iceConnectionState === 'disconnected') {{
+                    console.log("Attempting ICE restart...");
+                    peer.restartIce();
                 }}
             }}
 
@@ -320,31 +265,67 @@ async def get(request: Request, call_id: Optional[str] = None):
                 if (reconnectTimeout) {{
                     clearTimeout(reconnectTimeout);
                 }}
-                createPeerConnection();
-                connectWebSocket();
+                initializeConnection();
             }}
 
-            // Handle page visibility changes (when user switches tabs/apps)
-            document.addEventListener("visibilitychange", () => {{
-                if (document.visibilityState === 'visible') {{
-                    // Page became visible again, check connection
-                    if (peer && peer.iceConnectionState === 'disconnected') {{
-                        scheduleReconnect();
-                    }}
+            function initializeConnection() {{
+                createPeerConnection();
+                createWebSocket();
+            }}
+
+            // Initialize media and connection
+            async function initialize() {{
+                try {{
+                    updateStatus("Getting camera and microphone...", "connecting");
+                    
+                    // Optimized constraints for poor network
+                    const constraints = {{
+                        video: {{ 
+                            width: {{ ideal: 480, max: 640 }}, 
+                            height: {{ ideal: 360, max: 480 }},
+                            frameRate: {{ ideal: 15, max: 20 }}
+                        }}, 
+                        audio: {{ 
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                            autoGainControl: true
+                        }} 
+                    }};
+
+                    localStream = await navigator.mediaDevices.getUserMedia(constraints);
+                    console.log("Got local media stream");
+                    localVideo.srcObject = localStream;
+                    
+                    updateStatus("Connecting...", "connecting");
+                    initializeConnection();
+                    
+                }} catch (e) {{
+                    console.error("Error getting user media:", e);
+                    updateStatus("Camera/microphone access denied", "disconnected");
                 }}
-            }});
+            }}
 
             // Handle network status changes
             window.addEventListener('online', () => {{
-                console.log("Network came back online");
-                if (peer && peer.iceConnectionState !== 'connected') {{
-                    scheduleReconnect();
+                console.log("Network back online");
+                if (reconnectAttempts > 0 || (peer && peer.iceConnectionState !== 'connected')) {{
+                    reconnectCall();
                 }}
             }});
 
             window.addEventListener('offline', () => {{
-                console.log("Network went offline");
+                console.log("Network offline");
                 updateStatus("Network offline", "disconnected");
+            }});
+
+            // Handle page visibility changes
+            document.addEventListener('visibilitychange', () => {{
+                if (document.visibilityState === 'visible') {{
+                    // Check connection when page becomes visible
+                    if (peer && (peer.iceConnectionState === 'disconnected' || peer.iceConnectionState === 'failed')) {{
+                        scheduleReconnect();
+                    }}
+                }}
             }});
 
             async function sendMessage() {{
@@ -353,10 +334,14 @@ async def get(request: Request, call_id: Optional[str] = None):
                 input.value = "";
             }}
 
-            // Initialize the call when page loads
-            window.addEventListener('load', () => {{
-                console.log("Page loaded, initializing call...");
-                initializeCall();
+            // Start the application
+            initialize();
+
+            // Cleanup on page unload
+            window.addEventListener('beforeunload', () => {{
+                isManualDisconnect = true;
+                if (ws) ws.close();
+                if (peer) peer.close();
             }});
         </script>
     </body>
@@ -368,16 +353,15 @@ async def get(request: Request, call_id: Optional[str] = None):
 async def websocket_endpoint(websocket: WebSocket, call_id: str):
     await websocket.accept()
     clients[call_id] = websocket
-    logger.info(f"Client {call_id} connected")
+    print(f"Client {call_id} connected")
     
     try:
         while True:
-            # Add timeout for receiving messages
+            # Wait for message with timeout for keep-alive
             try:
                 data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
-                logger.info(f"Received data from {call_id}: {data[:100]}...")
                 
-                # Handle ping messages
+                # Handle ping-pong for keep-alive
                 try:
                     message = json.loads(data)
                     if message.get("type") == "ping":
@@ -386,37 +370,32 @@ async def websocket_endpoint(websocket: WebSocket, call_id: str):
                 except json.JSONDecodeError:
                     pass
                 
+                # Forward message to the other client
                 target_id = "2" if call_id == "1" else "1"
-                
                 if target_id in clients:
                     try:
                         await clients[target_id].send_text(data)
-                        logger.info(f"Forwarded message from {call_id} to {target_id}")
+                        print(f"Forwarded message from {call_id} to {target_id}")
                     except Exception as e:
-                        logger.error(f"Error sending to target {target_id}: {e}")
-                        # Remove disconnected client
+                        print(f"Error sending to {target_id}: {e}")
                         clients.pop(target_id, None)
-                else:
-                    logger.warning(f"Target client {target_id} not found")
                         
             except asyncio.TimeoutError:
                 # Send ping to keep connection alive
                 try:
                     await websocket.send_text(json.dumps({"type": "ping"}))
-                    logger.debug(f"Sent ping to {call_id}")
                 except:
-                    logger.error(f"Failed to send ping to {call_id}")
                     break
                     
     except WebSocketDisconnect:
-        logger.info(f"Client {call_id} disconnected normally")
+        print(f"Client {call_id} disconnected")
     except Exception as e:
-        logger.error(f"WebSocket error for {call_id}: {e}")
+        print(f"Error with client {call_id}: {e}")
     finally:
         clients.pop(call_id, None)
-        logger.info(f"Cleaned up client {call_id}")
+        print(f"Cleaned up client {call_id}")
 
-# Health check endpoint
+# Health check
 @app.get("/health")
-async def health_check():
-    return {"status": "healthy", "clients": len(clients)}
+async def health():
+    return {"status": "ok", "active_clients": len(clients)}
