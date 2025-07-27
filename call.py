@@ -6,7 +6,7 @@ import asyncio
 app = FastAPI()
 clients = {}
 
-@app.get("/")
+@app.get("/call/")
 async def get(request: Request, call_id: Optional[str] = None):
     if call_id not in ["1", "2"]:
         return HTMLResponse("<h2>Invalid or missing call ID. Use ?call_id=1 or ?call_id=2</h2>")
@@ -157,7 +157,7 @@ async def get(request: Request, call_id: Optional[str] = None):
 
             peer.oniceconnectionstatechange = () => {{
                 console.log("ICE connection state:", peer.iceConnectionState);
-                statusDisplay.textContent = `ICE state: ${peer.iceConnectionState}`;
+                statusDisplay.textContent = "ICE state: " + peer.iceConnectionState;
                 if (peer.iceConnectionState === "disconnected" || peer.iceConnectionState === "failed") {{
                     if (reconnectAttempts < maxReconnectAttempts) {{
                         console.log("Attempting ICE restart...");
