@@ -189,20 +189,45 @@ async def get(request: Request, call_id: Optional[str] = None):
             }}
 
             function connectWebSocket() {{
+                console.log("Current protocol:", window.location.protocol);
+                console.log("Current host:", window.location.host);
+                
                 if (ws) {{
                     ws.close();
                 }}
 
-                ws = new WebSocket(`ws://${{location.host}}/ws/${{callId}}`);
+                // CRITICAL: Use wss:// for HTTPS and ws:// for HTTP
+                const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${{wsProtocol}}//${{window.location.host}}/ws/${{callId}}`;
+                
+                console.log("Connecting to WebSocket:", wsUrl);
+                updateStatus("Connecting to server...", "connecting");
+                
+                try {{
+                    ws = new WebSocket(wsUrl);
+                }} catch (error) {{
+                    console.error("Error creating WebSocket:", error);
+                    updateStatus("Failed to create WebSocket connection", "disconnected");
+                    return;
+                }}
 
                 ws.onopen = () => {{
-                    console.log("WebSocket connected");
+                    console.log("WebSocket connected successfully");
                     updateStatus("WebSocket connected", "connecting");
                 }};
 
                 ws.onmessage = async (event) => {{
                     try {{
                         const message = JSON.parse(event.data);
+
+                        // Handle ping/pong messages
+                        if (message.type === "ping") {{
+                            ws.send(JSON.stringify({{ type: "pong" }}));
+                            return;
+                        }}
+                        if (message.type === "pong") {{
+                            return;
+                        }}
 
                         if (message.type === "offer") {{
                             console.log("Received offer");
@@ -230,15 +255,17 @@ async def get(request: Request, call_id: Optional[str] = None):
                     }}
                 }};
 
-                ws.onclose = () => {{
-                    console.log("WebSocket disconnected");
+                ws.onclose = (event) => {{
+                    console.log("WebSocket disconnected:", event.code, event.reason);
                     updateStatus("WebSocket disconnected", "disconnected");
-                    scheduleReconnect();
+                    if (event.code !== 1000) {{ // Not a normal closure
+                        scheduleReconnect();
+                    }}
                 }};
 
                 ws.onerror = (error) => {{
                     console.error("WebSocket error:", error);
-                    updateStatus("WebSocket error", "disconnected");
+                    updateStatus("WebSocket connection error", "disconnected");
                 }};
             }}
 
@@ -246,27 +273,43 @@ async def get(request: Request, call_id: Optional[str] = None):
                 try {{
                     updateStatus("Getting camera and microphone...", "connecting");
                     
-                    localStream = await navigator.mediaDevices.getUserMedia({{ 
+                    // Request media with constraints optimized for poor network
+                    const constraints = {{
                         video: {{ 
-                            width: {{ ideal: 640 }}, 
-                            height: {{ ideal: 480 }} 
+                            width: {{ ideal: 640, max: 640 }}, 
+                            height: {{ ideal: 480, max: 480 }},
+                            frameRate: {{ ideal: 15, max: 30 }}
                         }}, 
                         audio: {{ 
                             echoCancellation: true,
                             noiseSuppression: true,
-                            autoGainControl: true
+                            autoGainControl: true,
+                            sampleRate: 16000  // Lower sample rate for poor network
                         }} 
-                    }});
+                    }};
+                    
+                    localStream = await navigator.mediaDevices.getUserMedia(constraints);
                     
                     console.log("Got local media stream");
                     localVideo.srcObject = localStream;
+                    updateStatus("Camera and microphone ready", "connecting");
                     
                     createPeerConnection();
                     connectWebSocket();
                     
                 }} catch (e) {{
                     console.error("Error getting user media:", e);
-                    updateStatus("Error accessing camera/microphone", "disconnected");
+                    let errorMessage = "Error accessing camera/microphone";
+                    
+                    if (e.name === 'NotAllowedError') {{
+                        errorMessage = "Camera/microphone access denied. Please allow permissions.";
+                    }} else if (e.name === 'NotFoundError') {{
+                        errorMessage = "No camera/microphone found";
+                    }} else if (e.name === 'NotReadableError') {{
+                        errorMessage = "Camera/microphone in use by another application";
+                    }}
+                    
+                    updateStatus(errorMessage, "disconnected");
                 }}
             }}
 
@@ -311,7 +354,10 @@ async def get(request: Request, call_id: Optional[str] = None):
             }}
 
             // Initialize the call when page loads
-            initializeCall();
+            window.addEventListener('load', () => {{
+                console.log("Page loaded, initializing call...");
+                initializeCall();
+            }});
         </script>
     </body>
     </html>
@@ -369,3 +415,8 @@ async def websocket_endpoint(websocket: WebSocket, call_id: str):
     finally:
         clients.pop(call_id, None)
         logger.info(f"Cleaned up client {call_id}")
+
+# Health check endpoint
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "clients": len(clients)}
