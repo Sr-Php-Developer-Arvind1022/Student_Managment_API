@@ -25,108 +25,107 @@ async def get(request: Request, call_id: Optional[str] = None):
         <button onclick="sendMessage()">Send</button>
 
         <script>
-    const callId = "{{call_id}}";
-    let ws;
-    let reconnectAttempts = 0;
-    const maxReconnectDelay = 30000;
+            const callId = "{call_id}";
+            let ws;
+            let reconnectAttempts = 0;
+            const maxReconnectDelay = 30000;
 
-    const localVideo = document.getElementById("localVideo");
-    const remoteVideo = document.getElementById("remoteVideo");
-    const peer = new RTCPeerConnection();
+            const localVideo = document.getElementById("localVideo");
+            const remoteVideo = document.getElementById("remoteVideo");
+            const peer = new RTCPeerConnection();
 
-    function connectWebSocket() {
-        ws = new WebSocket(`wss://${location.host}/call/ws/${callId}`);
+            function connectWebSocket() {{
+                ws = new WebSocket("wss://" + location.host + "/ws/" + callId);
 
-        ws.onopen = () => {
-            console.log("✅ WebSocket connected");
-            reconnectAttempts = 0;
-        };
+                ws.onopen = () => {{
+                    console.log("✅ WebSocket connected");
+                    reconnectAttempts = 0;
+                }};
 
-        ws.onerror = (err) => {
-            console.error("❌ WebSocket error:", err);
-            ws.close();
-        };
+                ws.onerror = (err) => {{
+                    console.error("❌ WebSocket error:", err);
+                    ws.close();
+                }};
 
-        ws.onclose = () => {
-            console.warn("⚠️ WebSocket closed. Trying to reconnect...");
-            reconnectWithBackoff();
-        };
+                ws.onclose = () => {{
+                    console.warn("⚠️ WebSocket closed. Trying to reconnect...");
+                    reconnectWithBackoff();
+                }};
 
-        ws.onmessage = async (event) => {
-            const message = JSON.parse(event.data);
+                ws.onmessage = async (event) => {{
+                    const message = JSON.parse(event.data);
 
-            if (message.type === "offer") {
-                console.log("📩 Received offer");
-                await peer.setRemoteDescription(new RTCSessionDescription(message.offer));
-                const answer = await peer.createAnswer();
-                await peer.setLocalDescription(answer);
-                ws.send(JSON.stringify({ type: "answer", answer }));
-            }
+                    if (message.type === "offer") {{
+                        console.log("📩 Received offer");
+                        await peer.setRemoteDescription(new RTCSessionDescription(message.offer));
+                        const answer = await peer.createAnswer();
+                        await peer.setLocalDescription(answer);
+                        ws.send(JSON.stringify({{ type: "answer", answer }}));
+                    }}
 
-            if (message.type === "answer") {
-                console.log("📩 Received answer");
-                await peer.setRemoteDescription(new RTCSessionDescription(message.answer));
-            }
+                    if (message.type === "answer") {{
+                        console.log("📩 Received answer");
+                        await peer.setRemoteDescription(new RTCSessionDescription(message.answer));
+                    }}
 
-            if (message.type === "ice") {
-                try {
-                    console.log("📩 Adding ICE candidate");
-                    await peer.addIceCandidate(new RTCIceCandidate(message.candidate));
-                } catch (e) {
-                    console.error("❗ Error adding ICE candidate:", e);
-                }
-            }
-        };
-    }
+                    if (message.type === "ice") {{
+                        try {{
+                            console.log("📩 Adding ICE candidate");
+                            await peer.addIceCandidate(new RTCIceCandidate(message.candidate));
+                        }} catch (e) {{
+                            console.error("❗ Error adding ICE candidate:", e);
+                        }}
+                    }}
+                }};
+            }}
 
-    function reconnectWithBackoff() {
-        reconnectAttempts++;
-        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), maxReconnectDelay);
-        console.log(`🔄 Reconnecting in ${delay / 1000}s...`);
-        setTimeout(connectWebSocket, delay);
-    }
+            function reconnectWithBackoff() {{
+                reconnectAttempts++;
+                const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), maxReconnectDelay);
+                console.log(`🔄 Reconnecting in ${{delay / 1000}}s...`);
+                setTimeout(connectWebSocket, delay);
+            }}
 
-    // Setup media
-    navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
-        localVideo.srcObject = stream;
-        stream.getTracks().forEach(track => peer.addTrack(track, stream));
+            // Setup media
+            navigator.mediaDevices.getUserMedia({{ video: true, audio: true }}).then(stream => {{
+                localVideo.srcObject = stream;
+                stream.getTracks().forEach(track => peer.addTrack(track, stream));
 
-        if (callId === "1") {
-            peer.onnegotiationneeded = async () => {
-                console.log("📞 Starting negotiation...");
-                const offer = await peer.createOffer();
-                await peer.setLocalDescription(offer);
-                if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ type: "offer", offer }));
-                }
-            };
-        }
-    }).catch(err => {
-        console.error("🚫 Could not get user media:", err);
-    });
+                if (callId === "1") {{
+                    peer.onnegotiationneeded = async () => {{
+                        console.log("📞 Starting negotiation...");
+                        const offer = await peer.createOffer();
+                        await peer.setLocalDescription(offer);
+                        if (ws.readyState === WebSocket.OPEN) {{
+                            ws.send(JSON.stringify({{ type: "offer", offer }}));
+                        }}
+                    }};
+                }}
+            }}).catch(err => {{
+                console.error("🚫 Could not get user media:", err);
+            }});
 
-    peer.onicecandidate = (event) => {
-        if (event.candidate && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "ice", candidate: event.candidate }));
-        }
-    };
+            peer.onicecandidate = (event) => {{
+                if (event.candidate && ws.readyState === WebSocket.OPEN) {{
+                    ws.send(JSON.stringify({{ type: "ice", candidate: event.candidate }}));
+                }}
+            }};
 
-    peer.ontrack = (event) => {
-        if (event.streams && event.streams[0]) {
-            remoteVideo.srcObject = event.streams[0];
-        }
-    };
+            peer.ontrack = (event) => {{
+                if (event.streams && event.streams[0]) {{
+                    remoteVideo.srcObject = event.streams[0];
+                }}
+            }};
 
-    function sendMessage() {
-        const input = document.getElementById("messageInput");
-        alert("Message: " + input.value);
-        input.value = "";
-    }
+            function sendMessage() {{
+                const input = document.getElementById("messageInput");
+                alert("Message: " + input.value);
+                input.value = "";
+            }}
 
-    // Start WebSocket connection
-    connectWebSocket();
-</script>
-
+            // Start WebSocket connection
+            connectWebSocket();
+        </script>
     </body>
     </html>
     """
@@ -144,4 +143,3 @@ async def websocket_endpoint(websocket: WebSocket, call_id: str):
                 await clients[target_id].send_text(data)
     except Exception:
         clients.pop(call_id, None)
-
