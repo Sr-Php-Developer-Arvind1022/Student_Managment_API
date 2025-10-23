@@ -166,7 +166,8 @@ def studentLogin(
 def addQuizeQuestion(
     question: str = Body(...),
     options: list = Body(...),
-    correct_option: str = Body(...)
+    correct_option: str = Body(...),
+    course_id: str = Body(...): str = Body(...)
 ):
     if len(options) != 4:
         return {"status": False, "message": "You must provide exactly 4 options."}
@@ -178,7 +179,8 @@ def addQuizeQuestion(
         "question": question,
         "options": options,
         "correct_option": correct_option,
-        "common_id": common_id
+        "common_id": common_id,
+        "course_id" : course_id
     }
 
     with get_db() as db:
