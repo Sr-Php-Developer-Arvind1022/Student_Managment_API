@@ -167,7 +167,7 @@ def addQuizeQuestion(
     question: str = Body(...),
     options: list = Body(...),
     correct_option: str = Body(...),
-    course_id: str = Body(...): str = Body(...)
+    course_id: str = Body(...)
 ):
     if len(options) != 4:
         return {"status": False, "message": "You must provide exactly 4 options."}
