@@ -187,62 +187,62 @@ def addQuizeQuestion(
         db.quiz_questions.insert_one(quiz_data)
 
     return {"status": True, "message": "Question added successfully"}
-# @router.get("/quiz/all-questions")
-# def getAllQuizQuestions():
-#     with get_db() as db:
-#         # Use index on 'question'
-#         cursor = db.quiz_questions.find({}, {"_id": 0}).hint("question_1")
-#         questions = list(cursor)
-
-#         if not questions:
-#             return {"status": False, "message": "No quiz questions found"}
-
-#         return {"status": True, "data": questions}
-@router.post("/quiz/all-questions")
-def getAllQuizQuestions(course_id: str = Body(None), course_id_form: str = Form(None)):
-    # choose form value first (for multipart/form-data), then json body
-    raw = course_id_form or course_id
-
-    # helper to clean multipart/form-data garbage if present
-    def _extract_id(s: str | None) -> str | None:
-        if not s:
-            return None
-        if "Content-Disposition" not in s and "----" not in s:
-            return s.strip()
-        # try to capture the value that appears after the blank line following Content-Disposition
-        m = re.search(r'name="course_id"[\s\S]*?\r\n\r\n(.*?)\r\n', s, re.S)
-        if m:
-            return m.group(1).strip()
-        # fallback: remove boundary and disposition lines and pick the last non-empty remainder
-        lines = [ln.strip() for ln in s.splitlines() if ln.strip() and "Content-Disposition" not in ln and not ln.startswith("----") and "name=" not in ln and not ln.lower().startswith("content-type:")]
-        if lines:
-            return lines[-1].strip()
-        # final fallback
-        return s.strip()
-
-    cleaned_course_id = _extract_id(raw)
-    print("Course ID received (cleaned):", cleaned_course_id)
-    print("Type:", type(cleaned_course_id))
-
+@router.get("/quiz/all-questions")
+def getAllQuizQuestions():
     with get_db() as db:
-        # First, let's see what course_ids actually exist
-        all_courses = db.quiz_questions.distinct("course_id")
-        print("Available course_ids:", all_courses)
-
-        cursor = db.quiz_questions.find({"course_id": cleaned_course_id}, {"_id": 0})
+        # Use index on 'question'
+        cursor = db.quiz_questions.find({}, {"_id": 0}).hint("question_1")
         questions = list(cursor)
 
         if not questions:
-            return {
-                "status": False,
-                "message": "No quiz questions found for this course",
-                "debug": {
-                    "received_course_id": cleaned_course_id,
-                    "available_course_ids": all_courses
-                }
-            }
+            return {"status": False, "message": "No quiz questions found"}
 
         return {"status": True, "data": questions}
+# @router.post("/quiz/all-questions")
+# def getAllQuizQuestions(course_id: str = Body(None), course_id_form: str = Form(None)):
+#     # choose form value first (for multipart/form-data), then json body
+#     raw = course_id_form or course_id
+
+#     # helper to clean multipart/form-data garbage if present
+#     def _extract_id(s: str | None) -> str | None:
+#         if not s:
+#             return None
+#         if "Content-Disposition" not in s and "----" not in s:
+#             return s.strip()
+#         # try to capture the value that appears after the blank line following Content-Disposition
+#         m = re.search(r'name="course_id"[\s\S]*?\r\n\r\n(.*?)\r\n', s, re.S)
+#         if m:
+#             return m.group(1).strip()
+#         # fallback: remove boundary and disposition lines and pick the last non-empty remainder
+#         lines = [ln.strip() for ln in s.splitlines() if ln.strip() and "Content-Disposition" not in ln and not ln.startswith("----") and "name=" not in ln and not ln.lower().startswith("content-type:")]
+#         if lines:
+#             return lines[-1].strip()
+#         # final fallback
+#         return s.strip()
+
+#     cleaned_course_id = _extract_id(raw)
+#     print("Course ID received (cleaned):", cleaned_course_id)
+#     print("Type:", type(cleaned_course_id))
+
+#     with get_db() as db:
+#         # First, let's see what course_ids actually exist
+#         all_courses = db.quiz_questions.distinct("course_id")
+#         print("Available course_ids:", all_courses)
+
+#         cursor = db.quiz_questions.find({"course_id": cleaned_course_id}, {"_id": 0})
+#         questions = list(cursor)
+
+#         if not questions:
+#             return {
+#                 "status": False,
+#                 "message": "No quiz questions found for this course",
+#                 "debug": {
+#                     "received_course_id": cleaned_course_id,
+#                     "available_course_ids": all_courses
+#                 }
+#             }
+
+#         return {"status": True, "data": questions}
 @router.post("/quiz/submit-answers")
 def submitMultipleQuizAnswers(
     student_common_id: str = Body(...),
